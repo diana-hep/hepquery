@@ -53,10 +53,12 @@ class Cache(object):
             items = os.listdir(os.path.join(directory, path))
             items.sort()
 
+            # directories should all have numerical names (with the right number of digits)
             if all(os.path.isdir(os.path.join(directory, path, fn)) and digits.match(fn) for fn in items):
                 for fn in items:
                     recurse(d + 1, (n + int(fn)) * maxperdir, os.path.join(path, fn))
 
+            # a directory of files should all be files; no mixing of files and directories
             elif all(not os.path.isdir(os.path.join(directory, path, fn)) for fn in items):
                 for fn in items:
                     assert fn.count(delimiter) >= 2
@@ -77,13 +79,13 @@ class Cache(object):
                     out.number = number
 
             else:
-                assert False, "directory contents must all be directories (named /{0}/) or all be files:\n\n    {1}".format(digits.pattern, path)
+                assert False, "directory contents must all be directories (named /{0}/ because maxperdir is {1}) or all be files:\n\n    {2}".format(digits.pattern, maxperdir, path)
 
         recurse(0, 0, "")
         out.number += 1
         return out
 
-    def newfile(self, name, dtype, shape):
+    def newfilename(self, name, shape, dtype):
         # increase number
         number = self.number
         self.number += 1
@@ -99,7 +101,7 @@ class Cache(object):
             os.rename(tmp, os.path.join(self.directory, self._formatter.format(0)))
 
         # create directories in path if necessary
-        path = self.directory
+        path = ""
         for d in range(self.depth, 0, -1):
             factor = self.maxperdir**d
 
@@ -107,9 +109,15 @@ class Cache(object):
             number = number % factor
 
             path = os.path.join(path, fn)
-            if not os.path.exists(path):
-                os.mkdir(path)
+            if not os.path.exists(os.path.join(self.directory, path)):
+                os.mkdir(os.path.join(self.directory, path))
 
         # return new filename
         fn = self._formatter.format(number)
-        return os.path.join(path, self.delimiter.join([fn, name, dtype] + [str(x) for x in shape]))
+        return os.path.join(path, self.delimiter.join([fn, name] + [str(x) for x in shape] + [dtype]))
+
+    def cleanup(self, path):
+        while path != "":
+            path, fn = os.path.split(path)
+            if path != "" and len(os.listdir(os.path.join(self.directory, path))) == 0:
+                os.rmdir(os.path.join(self.directory, path))
