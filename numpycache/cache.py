@@ -17,6 +17,7 @@
 import os
 import shutil
 import math
+import re
 
 import numpy
 
@@ -26,7 +27,7 @@ class Cache(object):
         self.limitbytes = limitbytes
         self.maxperdir = maxperdir
         self.delimiter = delimiter
-        self._formatter = "{0:0" + str(int(math.ceil(math.log(100, 10)))) + "d}"
+        self._formatter = "{0:0" + str(int(math.ceil(math.log(maxperdir, 10)))) + "d}"
 
         self.lookup = {}
         self.order = []
@@ -44,33 +45,42 @@ class Cache(object):
     @staticmethod
     def adopt(directory, limitbytes, maxperdir=100, delimiter="."):
         out = Cache(directory, limitbytes, maxperdir, delimiter)
+        out.depth = None
+        out.number = None
 
-        def recurse(dep, num, path):
-            paths = os.listdir(path)
-            paths.sort()
+        digits = re.compile("^[0-9]{" + str(int(math.ceil(math.log(maxperdir, 10)))) + "}$")
+        def recurse(d, n, path):
+            items = os.listdir(os.path.join(directory, path))
+            items.sort()
 
-            if all(os.path.isdir(fn) for fn in paths):
-                assert all(int(fn) < maxperdir for fn in paths)
-                for fn in paths:
-                    n = int(fn)
-                    recurse(dep + 1, (num + n) * maxperdir, os.path.join(path, fn))
+            if all(os.path.isdir(os.path.join(directory, path, fn)) and digits.match(fn) for fn in items):
+                for fn in items:
+                    recurse(d + 1, (n + int(fn)) * maxperdir, os.path.join(path, fn))
 
-            elif all(not os.path.isdir(fn) for fn in paths):
-                for fn in paths:
+            elif all(not os.path.isdir(os.path.join(directory, path, fn)) for fn in items):
+                for fn in items:
                     assert fn.count(delimiter) >= 2
+                    i1 = fn.index(delimiter) + 1
+                    i2 = fn.index(delimiter, i1)
+                    name = fn[i1:i2]
+                    number = n + int(fn[:i1 - 1])
 
-                    upton = fn.index(delimiter)
-                    n = int(fn[:upton])
-                    name = fn[upton : fn.index(delimiter, upton + 1)]
-
-                    self.lookup[name] = fn
-                    self.order.append(name)
-                    self.number = num + n
+                    out.lookup[name] = os.path.join(path, fn)
+                    out.order.append(name)
+                    out.numbytes += 0
+                    if out.depth is None:
+                        out.depth = d
+                    else:
+                        assert out.depth == d, "some files are at depth {0}, others at {1}".format(out.depth, d)
+                    if out.number is not None:
+                        assert number > out.number
+                    out.number = number
 
             else:
-                assert False, "subpaths must be all directories or all files at {0}".format(path)
+                assert False, "directory contents must all be directories (named /{0}/) or all be files:\n\n    {1}".format(digits.pattern, path)
 
-        recurse(1, 0, directory)
+        recurse(0, 0, "")
+        out.number += 1
         return out
 
     def newfile(self, name, dtype, shape):
