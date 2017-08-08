@@ -85,7 +85,7 @@ class Cache(object):
         out.number += 1
         return out
 
-    def ingest(self, name, oldfilename):
+    def newfile(self, name, oldfilename):
         newbytes = os.path.getsize(oldfilename)
 
         if self.limitbytes is not None:
@@ -94,12 +94,41 @@ class Cache(object):
                 self._evict(bytestofree, self.directory)
 
         newfilename = self._newfilename(name)
-        os.rename(oldfilename, newfilename)
+        os.rename(oldfilename, os.path.join(self.directory, newfilename))
 
         self.lookup[name] = newfilename
         self.numbytes += newbytes
 
+    def has(self, name):
+        return name in self.lookup
+
+    def get(self, name):
+        return self.lookup[name]
+
+    def maybe(self, name):
+        return self.lookup.get(name, None)
+
+    def touch(self, *names):
+        cleanup = set()
+        for name in names:
+            oldname = self.get(name)
+            newname = self._newfilename(name)
+            os.rename(os.path.join(self.directory, oldname), os.path.join(self.directory, newname))
+            cleanup.add(oldname)
+            
+        # clean up empty directories
+        for oldname in cleanup:
+            path, fn = os.path.split(oldname)
+            while path != "":
+                if len(os.listdir(os.path.join(self.directory, path))) == 0:
+                    os.rmdir(os.path.join(self.directory, path))
+                path, fn = os.path.split(path)
+
+    def linkfile(self, name, tofilename):
+        os.link(self.get(name), tofilename)
+
     def _evict(self, bytestofree, path):
+        # eliminate in sort order
         items = os.listdir(path)
         items.sort()
 
@@ -107,11 +136,16 @@ class Cache(object):
             subpath = os.path.join(path, fn)
 
             if os.path.isdir(subpath):
+                # descend down to the file level
                 bytestofree = self._evict(bytestofree, subpath)
             else:
-                bytestofree -= os.path.getsize(subpath)
+                # delete each file
+                numbytes = os.path.getsize(subpath)
                 os.remove(subpath)
-                
+                bytestofree -= numbytes
+                self.numbytes -= numbytes
+
+            # until we're under budget
             if bytestofree <= 0:
                 return 0
 
@@ -147,9 +181,3 @@ class Cache(object):
         # return new filename
         fn = self._formatter.format(number)
         return os.path.join(path, fn + self.delimiter + str(name))
-
-    def _cleanup(self, path):
-        while path != "":
-            path, fn = os.path.split(path)
-            if path != "" and len(os.listdir(os.path.join(self.directory, path))) == 0:
-                os.rmdir(os.path.join(self.directory, path))
