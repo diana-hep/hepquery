@@ -19,8 +19,6 @@ import shutil
 import math
 import re
 
-import numpy
-
 class Cache(object):
     def __init__(self, directory, limitbytes, maxperdir=100, delimiter="."):
         self.directory = directory
@@ -30,7 +28,6 @@ class Cache(object):
         self._formatter = "{0:0" + str(int(math.ceil(math.log(maxperdir, 10)))) + "d}"
 
         self.lookup = {}
-        self.order = []
         self.numbytes = 0
         self.depth = 0
         self.number = 0
@@ -68,7 +65,6 @@ class Cache(object):
                     number = n + int(fn[:i1 - 1])
 
                     out.lookup[name] = os.path.join(path, fn)
-                    out.order.append(name)
                     out.numbytes += 0
                     if out.depth is None:
                         out.depth = d
@@ -85,7 +81,7 @@ class Cache(object):
         out.number += 1
         return out
 
-    def newfilename(self, name, shape, dtype):
+    def newfilename(self, name):
         # increase number
         number = self.number
         self.number += 1
@@ -114,7 +110,7 @@ class Cache(object):
 
         # return new filename
         fn = self._formatter.format(number)
-        return os.path.join(path, self.delimiter.join([fn, name] + [str(x) for x in shape] + [dtype]))
+        return os.path.join(path, fn + self.delimiter + str(name))
 
     def cleanup(self, path):
         while path != "":
