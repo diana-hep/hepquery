@@ -20,7 +20,7 @@ import math
 import re
 
 class Cache(object):
-    def __init__(self, directory, limitbytes, maxperdir=100, delimiter="."):
+    def __init__(self, directory, limitbytes, maxperdir=1000, delimiter="."):
         self.directory = directory
         self.limitbytes = limitbytes
         self.maxperdir = maxperdir
@@ -33,14 +33,14 @@ class Cache(object):
         self.number = 0
 
     @staticmethod
-    def overwrite(directory, limitbytes, maxperdir=100, delimiter="."):
+    def overwrite(directory, limitbytes, maxperdir=1000, delimiter="."):
         if os.path.exists(directory):
             shutil.rmtree(directory)
         os.mkdir(directory)
         return Cache(directory, limitbytes, maxperdir, delimiter)
 
     @staticmethod
-    def adopt(directory, limitbytes, maxperdir=100, delimiter="."):
+    def adopt(directory, limitbytes, maxperdir=1000, delimiter="."):
         out = Cache(directory, limitbytes, maxperdir, delimiter)
         out.depth = None
         out.number = None
@@ -64,12 +64,16 @@ class Cache(object):
                     name = fn[i1:i2]
                     number = n + int(fn[:i1 - 1])
 
-                    out.lookup[name] = os.path.join(path, fn)
-                    out.numbytes += 0
+                    fullpath = os.path.join(path, fn)
+                    out.lookup[name] = fullpath
+
+                    out.numbytes += os.path.getsize(fullpath)
+
                     if out.depth is None:
                         out.depth = d
                     else:
                         assert out.depth == d, "some files are at depth {0}, others at {1}".format(out.depth, d)
+
                     if out.number is not None:
                         assert number > out.number
                     out.number = number
@@ -81,7 +85,39 @@ class Cache(object):
         out.number += 1
         return out
 
-    def newfilename(self, name):
+    def ingest(self, name, oldfilename):
+        newbytes = os.path.getsize(oldfilename)
+
+        if self.limitbytes is not None:
+            bytestofree = self.numbytes + newbytes - self.limitbytes
+            if bytestofree > 0:
+                self._evict(bytestofree, self.directory)
+
+        newfilename = self._newfilename(name)
+        os.rename(oldfilename, newfilename)
+
+        self.lookup[name] = newfilename
+        self.numbytes += newbytes
+
+    def _evict(self, bytestofree, path):
+        items = os.listdir(path)
+        items.sort()
+
+        for fn in items:
+            subpath = os.path.join(path, fn)
+
+            if os.path.isdir(subpath):
+                bytestofree = self._evict(bytestofree, subpath)
+            else:
+                bytestofree -= os.path.getsize(subpath)
+                os.remove(subpath)
+                
+            if bytestofree <= 0:
+                return 0
+
+        return bytestofree
+        
+    def _newfilename(self, name):
         # increase number
         number = self.number
         self.number += 1
@@ -112,7 +148,7 @@ class Cache(object):
         fn = self._formatter.format(number)
         return os.path.join(path, fn + self.delimiter + str(name))
 
-    def cleanup(self, path):
+    def _cleanup(self, path):
         while path != "":
             path, fn = os.path.split(path)
             if path != "" and len(os.listdir(os.path.join(self.directory, path))) == 0:
