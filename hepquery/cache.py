@@ -108,17 +108,21 @@ class Cache(object):
     def touch(self, *names):
         cleanup = set()
         for name in names:
-            oldname = self.get(name)
-            newname = self._newfilename(name)
+            newname = self._newfilename(name)   # _newfilename changes self.lookup
+            oldname = self.lookup[name]         # and therefore must be called first
+
             os.rename(os.path.join(self.directory, oldname), os.path.join(self.directory, newname))
+            self.lookup[name] = newname
+
             cleanup.add(oldname)
             
         # clean up empty directories
         for oldname in cleanup:
             path, fn = os.path.split(oldname)
             while path != "":
-                if len(os.listdir(os.path.join(self.directory, path))) == 0:
-                    os.rmdir(os.path.join(self.directory, path))
+                olddir = os.path.join(self.directory, path)
+                if os.path.exists(olddir) and len(os.listdir(olddir)) == 0:
+                    os.rmdir(olddir)
                 path, fn = os.path.split(path)
 
     def linkfile(self, name, tofilename):
@@ -145,6 +149,10 @@ class Cache(object):
             # until we're under budget
             if bytestofree <= 0:
                 return 0
+
+        # clean up empty directories
+        if len(os.listdir(path)) == 0:
+            os.rmdir(path)
 
         return bytestofree
         
