@@ -58,16 +58,13 @@ class Cache(object):
             # a directory of files should all be files; no mixing of files and directories
             elif all(not os.path.isdir(os.path.join(directory, path, fn)) for fn in items):
                 for fn in items:
-                    assert fn.count(delimiter) >= 2
-                    i1 = fn.index(delimiter) + 1
-                    i2 = fn.index(delimiter, i1)
-                    name = fn[i1:i2]
-                    number = n + int(fn[:i1 - 1])
+                    assert delimiter in fn
+                    i = fn.index(delimiter)
+                    name = fn[i + 1:]
+                    number = n + int(fn[:i])
 
-                    fullpath = os.path.join(path, fn)
-                    out.lookup[name] = fullpath
-
-                    out.numbytes += os.path.getsize(fullpath)
+                    out.lookup[name] = os.path.join(path, fn)
+                    out.numbytes += os.path.getsize(os.path.join(directory, path, fn))
 
                     if out.depth is None:
                         out.depth = d
@@ -159,12 +156,20 @@ class Cache(object):
         # maybe increase depth
         while number >= self.maxperdir**(self.depth + 1):
             self.depth += 1
+
+            # move the subdirectories/files into a new directory ("tmp", then prefix)
             tmp = os.path.join(self.directory, "tmp")
             os.mkdir(tmp)
             for fn in os.listdir(self.directory):
                 if fn != "tmp":
                     os.rename(os.path.join(self.directory, fn), os.path.join(tmp, fn))
-            os.rename(tmp, os.path.join(self.directory, self._formatter.format(0)))
+
+            prefix = self._formatter.format(0)
+            os.rename(tmp, os.path.join(self.directory, prefix))
+
+            # also update the lookup map
+            for n, filename in self.lookup.items():
+                self.lookup[n] = os.path.join(prefix, filename)
 
         # create directories in path if necessary
         path = ""
