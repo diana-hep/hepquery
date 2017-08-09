@@ -177,6 +177,16 @@ class TestCache(unittest.TestCase):
             self.assertEqual(c.numbytes, 1023)
             self.assertEqual(list(lstree(directory)), ["1/", "1/2/", "1/2/1/", "1/2/1/2.x", "1/2/2/", "1/2/2/0.z", "1/2/2/1.a", "1/2/2/2.b", "2/", "2/0/", "2/0/0/", "2/0/0/0.c", "2/0/0/1.d", "2/0/0/2.e", "2/0/1/", "2/0/1/0.f", "2/0/1/1.g", "2/0/1/2.h", "2/0/2/", "2/0/2/0.i", "2/0/2/1.j", "2/0/2/2.k", "2/1/", "2/1/0/", "2/1/0/0.l", "2/1/0/1.m", "2/1/0/2.big", "2/1/1/", "2/1/1/0.small1", "2/1/1/1.small2", "2/1/1/2.small3"])
 
+            filename = os.path.join(working, "biggie")
+            c.linkfile("big", filename)
+
+            self.assertEqual(c.get("big"), "2/1/0/2.big")
+            self.assertEqual(os.stat(c.getfile("big")).st_ino, os.stat(filename).st_ino)
+
+            c.touch("big")
+            self.assertEqual(c.get("big"), "2/1/2/0.big")
+            self.assertEqual(os.stat(c.getfile("big")).st_ino, os.stat(filename).st_ino)
+
         finally:
             shutil.rmtree(working)
             shutil.rmtree(directory)

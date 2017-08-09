@@ -102,8 +102,17 @@ class Cache(object):
     def get(self, name):
         return self.lookup[name]
 
+    def getfile(self, name):
+        return os.path.join(self.directory, self.lookup[name])
+
     def maybe(self, name):
         return self.lookup.get(name, None)
+
+    def maybefile(self, name):
+        if self.has(name):
+            return os.path.join(self.directory, self.lookup.get(name, None))
+        else:
+            return None
 
     def touch(self, *names):
         cleanup = set()
@@ -126,7 +135,7 @@ class Cache(object):
                 path, fn = os.path.split(path)
 
     def linkfile(self, name, tofilename):
-        os.link(self.get(name), tofilename)
+        os.link(os.path.join(self.directory, self.get(name)), tofilename)
 
     def _evict(self, bytestofree, path):
         # eliminate in sort order
