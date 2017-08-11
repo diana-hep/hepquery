@@ -244,7 +244,7 @@ class ROOTDataset(object):
                 fcnargs.append(self.branch2array(column2branch[column], arrayname.isListOffset))
         fcnargs.extend(otherargs)
 
-        cfcn(*fcnargs)
+        # cfcn(*fcnargs)
         
 class ROOTDatasetFromTree(ROOTDataset):
     def __init__(self, tree, prefix=None, cache=None):
@@ -325,6 +325,7 @@ def fcn(tree):
         for muon in event.Muon:        
             print "muon", muon
             out += muon.pt
+            print "muon.pt", muon.pt
     return out
 
 file = ROOT.TFile("/mnt/data/DYJetsToLL_M_50_HT_100to200_13TeV_2/DYJetsToLL_M_50_HT_100to200_13TeV_2_0.root")
@@ -333,3 +334,20 @@ tree = file.Get("Events")
 dataset = ROOTDataset.fromtree(tree)
 
 dataset.foreach(fcn, debug=True)
+
+print len(dataset.branch2array("Muon", True))
+print dataset.branch2array("Muon", True)
+print len(dataset.branch2array("Muon.pt", False))
+print dataset.branch2array("Muon.pt", False)
+
+# event 98579
+# Traceback (most recent call last):
+#   File "<string>", line 1, in <module>
+#   File "hepquery/backends/root.py", line 336, in <module>
+#     dataset.foreach(fcn, debug=True)
+#   File "hepquery/backends/root.py", line 247, in foreach
+#     cfcn(*fcnargs)
+#   File "hepquery/backends/root.py", line 325, in fcn
+#     for muon in event.Muon:        
+# IndexError: index 98580 is out of bounds for axis 0 with size 98580
+
