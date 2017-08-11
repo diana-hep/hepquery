@@ -14,221 +14,306 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import time
 from types import MethodType
+import glob
+import os
+import time
 
 import ROOT
 import numpy
+
 from plur.types import *
 from plur.types.primitive import withrepr
 from plur.types.arrayname import ArrayName
-from plur.compile.code import local
+import plur.compile.code
 
 from hepquery.util import *
 
-def normalize(name):
-    return name
+class ROOTDataset(object):
+    @staticmethod
+    def fromtree(tree, **options):
+        return ROOTDatasetFromTree(tree, **options)
 
-def plurtype(tree, prefix, delimiter="-", offsettype=numpy.dtype(numpy.int32)):
-    def recurse(name, branch):
-        if len(branch.GetListOfBranches()) == 0:
-            if len(branch.GetListOfLeaves()) == 1:
-                leaf = branch.GetListOfLeaves()[0]
-                leaftype = leaf.GetTypeName()
+    @staticmethod
+    def fromchain(chain, **options):
+        return ROOTDatasetFromChain(chain, **options)
 
-                if leaftype == "Bool_t":
-                    out = withrepr(boolean, copy=True)
-                elif leaftype == "Char_t":
-                    out = withrepr(int8, copy=True)
-                elif leaftype == "Short_t":
-                    out = withrepr(int16, copy=True)
-                elif leaftype == "Int_t":
-                    out = withrepr(int32, copy=True)
-                elif leaftype == "Long_t" or leaftype == "Long64_t":
-                    out = withrepr(int64, copy=True)
-                elif leaftype == "Float_t" or leaftype == "Double32_t":
-                    out = withrepr(float32, copy=True)
-                elif leaftype == "Double_t":
-                    out = withrepr(float64, copy=True)
-                elif leaftype == "UChar_t":
-                    out = withrepr(uint8, copy=True)
-                elif leaftype == "UShort_t":
-                    out = withrepr(uint16, copy=True)
-                elif leaftype == "UInt_t":
-                    out = withrepr(uint32, copy=True)
-                elif leaftype == "ULong_t" or leaftype == "ULong64_t":
-                    out = withrepr(uint64, copy=True)
-                else:
+    @staticmethod
+    def fromfiles(treepath, *filepaths, **options):
+        return ROOTDatasetFromFiles(treepath, filepaths, **options)
+
+    def __init__(self):
+        raise TypeError("use a factory method: fromtree, fromchain, fromfiles")
+
+    def _rewind(self):
+        pass
+
+    def _hasnext(self):
+        pass
+
+    def _next(self):
+        pass
+
+    @staticmethod
+    def normalizename(name):
+        return name    # FIXME!
+
+    @staticmethod
+    def branch2dtype(branch):
+        leaves = list(branch.GetListOfLeaves())
+        if len(leaves) != 1:
+            raise NotImplementedError("TBranch::GetListOfLeaves()->GetEntries() == {0}".format(len(leaves)))
+        leaf = leaves[0]
+
+        leaftype = leaf.GetTypeName()
+        if leaftype == "Bool_t":
+            return boolean.of
+        elif leaftype == "Char_t":
+            return int8.of
+        elif leaftype == "Short_t":
+            return int16.of
+        elif leaftype == "Int_t":
+            return int32.of
+        elif leaftype == "Long_t" or leaftype == "Long64_t":
+            return int64.of
+        elif leaftype == "Float_t" or leaftype == "Double32_t":
+            return float32.of
+        elif leaftype == "Double_t":
+            return float64.of
+        elif leaftype == "UChar_t":
+            return uint8.of
+        elif leaftype == "UShort_t":
+            return uint16.of
+        elif leaftype == "UInt_t":
+            return uint32.of
+        elif leaftype == "ULong_t" or leaftype == "ULong64_t":
+            return uint64.of
+        else:
+            raise NotImplementedError("TLeaf::GetTypeName() == \"{0}\"".format(leaftype))
+
+    def tree2type(self, tree, prefix=None, delimiter="-"):
+        if prefix is None:
+            prefix = ROOTDataset.normalizename(tree.GetName())
+
+        def recurse(name, branch):
+            if len(branch.GetListOfBranches()) == 0:
+                try:
+                    dtype = ROOTDataset.branch2dtype(branch)
+
+                    out = withrepr(Primitive(dtype), copy=True)
+                    out.column = name.str()
+                    out.branch = branch.GetName()
+                    return out
+
+                except NotImplementedError:
                     return None
 
-                out.column = name.str()
-                out.root = branch
+            def getfields(name):
+                fields = {}
+                for b in branch.GetListOfBranches():
+                    n = b.GetName()
+                    if "." in n:
+                        n = n[n.rindex(".") + 1:]
+                    n = ROOTDataset.normalizename(n)
+                    if n not in fields:
+                        tpe = recurse(name.toRecord(n), b)
+                        if tpe is not None:
+                            fields[n] = tpe
+                return fields
+
+            className = branch.GetClassName()
+
+            if className == "TClonesArray":
+                assert len(branch.GetListOfLeaves()) == 1   # is this always true?
+
+                fields = getfields(name.toListData())
+                if len(fields) == 0:
+                    return None
+
+                out = List(Record(**fields))
+                out.of.column = None
+                out.of.branch = None
+
+                out.column = name.toListOffset().str()
+                out.branch = branch.GetName()
                 return out
 
-            return None
+            else:
+                fields = getfields(name)
+                if len(fields) == 0:
+                    return None
 
-        def getfields(name):
-            fields = {}
-            for b in branch.GetListOfBranches():
-                n = b.GetName()
-                if "." in n:
-                    n = n[n.rindex(".") + 1:]
-                n = normalize(n)
-                if n not in fields:
-                    tpe = recurse(name.toRecord(n), b)
-                    if tpe is not None:
-                        fields[n] = tpe
-            return fields
+                out = Record(**fields)
+                out.column = None
+                out.branch = None
+                return out
 
-        className = branch.GetClassName()
+        name = ArrayName(prefix, delimiter=delimiter)
+        fields = {}
+        for b in tree.GetListOfBranches():
+            tpe = recurse(name.toListData().toRecord(ROOTDataset.normalizename(b.GetName())), b)
+            if tpe is not None:
+                fields[b.GetName()] = tpe
 
-        if className == "TClonesArray":
-            assert len(branch.GetListOfLeaves()) == 1
+        if len(fields) == 0:
+            raise NotImplementedError("none of the branches in this ROOT TTree could be converted into PLUR types")
 
-            fields = getfields(name.toListData())
-            if len(fields) == 0:
-                return None
+        tpe = List(Record(**fields))
+        tpe.of.column = None
+        tpe.of.branch = None
+        tpe.column = name.toListOffset().str()
+        tpe.branch = None
+        return tpe, prefix
 
-            out = List(Record(**fields))
-            out.of.column = None
-            out.of.root = None
+    def compile(self, fcn, paramtypes={}, environment={}, numba=None, debug=False):
+        cfcn, columns = plur.compile.code.local(fcn, paramtypes, environment, numba, debug)
+        column2branch = {}
 
-            out.column = name.toListOffset().str()
-            out.root = branch.GetListOfLeaves()[0]
-            return out
+        def recurse(tpe):
+            if tpe.column in columns and tpe.branch is not None:
+                column2branch[tpe.column] = tpe.branch
+            # P
+            if isinstance(tpe, Primitive):
+                pass
+            # L
+            elif isinstance(tpe, List):
+                recurse(tpe.of)
+            # U
+            elif isinstance(tpe, Union):
+                for t in tpe.of:
+                    recurse(t)
+            # R
+            elif isinstance(tpe, Record):
+                for n, t in tpe.of:
+                    recurse(t)
+            else:
+                raise "unexpected type object: {0}".format(tpe)
 
+        recurse(self.type)
+        return cfcn, columns, column2branch
+
+    def branch2array(self, branchname, count2offset=False):
+        branch = self.tree.GetBranch(branchname)
+
+        # infer the Numpy dtype from the TLeaf type, but it starts as big-endian
+        dtype = ROOTDataset.branch2dtype(branch).newbyteorder(">")
+
+        # this is a (slight) overestimate of the size (due to ROOT headers per cluster)
+        if count2offset:
+            size = branch.GetTotalSize() + 1
         else:
-            fields = getfields(name)
-            if len(fields) == 0:
-                return None
+            size = branch.GetTotalSize()
 
-            out = Record(**fields)
-            out.column = None
-            out.root = None
-            return out
+        # allocate some memory
+        array = numpy.empty(size, dtype=dtype)
 
-    name = ArrayName(prefix, delimiter=delimiter)
-    fields = {}
-    for b in tree.GetListOfBranches():
-        tpe = recurse(name.toListData().toRecord(normalize(b.GetName())), b)
-        if tpe is not None:
-            fields[b.GetName()] = tpe
-
-    if len(fields) == 0:
-        raise NotImplementedError("none of the branches in this ROOT TTree could be converted into PLUR types")
-    else:
-        out = List(Record(**fields))
-        out.of.column = None
-        out.of.root = None
-        out.column = name.toListOffset().str()
-        out.root = None
-        return out
-
-def branchesAndLeaves(tpe, filter=None):
-    def recurse(tpe):
-        if not hasattr(tpe, "root"):
-            raise TypeError("type is missing ROOT information (e.g. create with hepquery.backends.root.plurtype)")
-
-        if tpe.root is None:
-            out = []
+        # fill it
+        if count2offset:
+            entries, bytes = branch.FillNumpyArray(array[1:])
         else:
-            out = [(tpe.column, tpe.root)]
+            entries, bytes = branch.FillNumpyArray(array)
 
-        # P
-        if isinstance(tpe, Primitive):
-            return out
-        # L
-        elif isinstance(tpe, List):
-            return out + [(tpe.column, tpe.root)] + recurse(tpe.of)
-        # U
-        elif isinstance(tpe, Union):
-            return out + [(tpe.column, tpe.root), (tpe.column2, tpe.root2)] + sum([recurse(t) for t in tpe.of], [])
-        # R
-        elif isinstance(tpe, Record):
-            return out + sum([recurse(t) for n, t in tpe.of], [])
+        # clip it to the actual length, which we know exactly after filling
+        if count2offset:
+            array = array[: (bytes // array.dtype.itemsize) + 1]
         else:
-            raise "unexpected type object: {0}".format(tpe)
+            array = array[: (bytes // array.dtype.itemsize)]
 
-    out = sum([recurse(t) for n, t in tpe.of.of], [])
-    if filter is None:
-        return dict(out)
-    else:
-        return dict([(c, r) for c, r in out if c in filter])
+        # swap the byte order: physical and interpreted
+        array = array.byteswap(True).view(array.dtype.newbyteorder("="))
 
-def countToOffset(countarray):
-    out = numpy.empty(countarray.shape[0] + 1, dtype=countarray.dtype)
-    out[0] = 0
-    numpy.cumsum(countarray, out=out[1:])
-    return out
+        # if this is to be an offset array, compute the cumulative sum of counts
+        if count2offset:
+            array[0] = 0
+            numpy.cumsum(array[1:], out=array[1:])
 
-def foreach(chain, fcn, otherargs=(), debug=True):
-    # if isinstance(chain, TChain):
+        return array
 
-    # elif isinstance(chain, TTree):
-    #     tree = chain
+    def foreach(self, fcn, *otherargs, **options):
+        cfcn, columns, column2branch = self.compile(fcn, (self.type,), **options)
+        arraynames = [ArrayName.parse(c, self.prefix) for c in columns]
 
-    # else:
-    #     raise TypeError("first argument must be a TChain or TTree, not {0}".format(chain))
+        toparrayname = ArrayName(self.prefix).toListOffset()
+        toparray = numpy.array([0, self.tree.GetEntries()], dtype=numpy.int64)
 
-    otherargs = tuple(otherargs)
+        fcnargs = []
+        for column, arrayname in zip(columns, arraynames):
+            if arrayname == toparrayname:
+                fcnargs.append(toparray)
+            else:
+                fcnargs.append(self.branch2array(column2branch[column], arrayname.isListOffset))
+        fcnargs.extend(otherargs)
 
-    if debug:
-        listoffiles = list(chain.GetListOfFiles())
+        cfcn(*fcnargs)
+        
+class ROOTDatasetFromTree(ROOTDataset):
+    def __init__(self, tree, prefix=None, cache=None):
+        self.tree = tree
+        if not self.tree:
+            raise IOError("tree not valid")
 
-    cumentries = 0
-    chain.LoadTree(cumentries)
+        self.type, self.prefix = self.tree2type(self.tree, prefix)
+        self.cache = cache
 
-    tree = chain.GetTree()
+class ROOTDatasetFromChain(ROOTDataset):
+    def __init__(self, chain, prefix=None, cache=None):
+        self.chain = chain
 
-    tpe = plurtype(tree, tree.GetName())
+        self._rewind()
+        if not self._hasnext():
+            raise IOError("empty TChain")
+        self._next()
 
-    compiledfcn, arraynames = local(fcn, (tpe,), debug=debug)
+        self.type, self.prefix = self.tree2type(self.tree, prefix)
+        self.cache = cache
 
-    brlf = branchesAndLeaves(tpe, arraynames)
-    iterargs = [brlf[n] for n in arraynames if n != ArrayName(tree.GetName()).toListOffset().str()]
-    postprocess = [ArrayName.parse(n, tree.GetName()).isListOffset for n in arraynames]
-    
-    if debug:
-        print("\nRUN:\n")
+    def _rewind(self):
+        self._treeindex = 0
+        self._entryindex = 0
 
-    toparray = numpy.array([0, 0], dtype=numpy.int64)
-    for treeindex in xrange(chain.GetNtrees()):
-        if debug:
-            startTime = time.time()
+    def _hasnext(self):
+        return self._treeindex < self.chain.GetNtrees()
 
-        if treeindex != 0:
-            cumentries += tree.GetEntries()
-            chain.LoadTree(cumentries)
-            tree = chain.GetTree()
-            iterargs = [tree.GetBranch(x.GetName()) if isinstance(x, ROOT.TBranch) else tree.GetLeaf(x.GetName()) for x in iterargs]
+    def _next(self):
+        if not self._hasnext(): raise StopIteration
+        self.chain.LoadTree(self._entryindex)
+        self.tree = self.chain.GetTree()
+        if not self.tree:
+            raise IOError("tree number {0} not valid in TChain".format(self._treeindex))
+        self._treeindex += 1
+        self._entryindex += self.chain.GetEntries()
 
-        for cluster in tree.GetNumpyIterator(*iterargs, return_new_buffers=False):
-            toparray[0] = cluster[0]  # start
-            toparray[1] = cluster[1]  # end
-                
-            fcnargs = [toparray]
-            for i, x in enumerate(cluster[2:]):
-                if postprocess[i]:
-                    fcnargs.append(countToOffset(x))
-                else:
-                    fcnargs.append(x)
-            fcnargs.extend(otherargs)
+class ROOTDatasetFromFiles(ROOTDataset):
+    def __init__(self, treepath, filepaths, prefix=None, cache=None):
+        self.treepath = treepath
+        self.filepaths = [y for x in filepaths for y in glob.glob(os.path.expanduser(x))]
 
-            for arg in fcnargs:
-                print arg.shape, arg
+        self._rewind()
+        if not self._hasnext():
+            raise IOError("empty file list")
+        self._next()
 
-            compiledfcn(*fcnargs)
+        self.type, self.prefix = self.tree2type(self.tree, prefix)
+        self.cache = cache
 
-        if debug:
-            print("{0}/{1}\t{2} in {3}\t{4} entries/sec".format(
-                treeindex,
-                chain.GetNtrees(),
-                listoffiles[treeindex].GetName(),
-                listoffiles[treeindex].GetTitle(),
-                tree.GetEntries() / (time.time() - startTime)))
+    def _rewind(self):
+        self._fileindex = 0
 
-if not hasattr(ROOT.TChain, "foreach"):
-    ROOT.TChain.foreach = MethodType(foreach, None, ROOT.TChain)
+    def _hasnext(self):
+        return self._fileindex < len(self.filepaths)
+
+    def _next(self):
+        if not self._hasnext(): raise StopIteration
+        self.file = ROOT.TFile(self.filepaths[self._fileindex])
+        if not self.file or self.file.IsZombie():
+            raise IOError("could not read file \"{0}\"".format(self.filepaths[self._fileindex]))
+        self.tree = self.file(self.treepath)
+        if not self.tree:
+            raise IOError("tree \"{0}\" not found in file \"{1}\"".format(self.treepath, self.filepaths[self._fileindex]))
+        self._fileindex += 1
+
+
+
 
 
 
@@ -242,7 +327,9 @@ def fcn(tree):
             out += muon.pt
     return out
 
-chain = ROOT.TChain("Events")
-chain.Add("../TTJets_13TeV_amcatnloFXFX_pythia8_2_77.root")
-chain.foreach(fcn)
+file = ROOT.TFile("/mnt/data/DYJetsToLL_M_50_HT_100to200_13TeV_2/DYJetsToLL_M_50_HT_100to200_13TeV_2_0.root")
+tree = file.Get("Events")
 
+dataset = ROOTDataset.fromtree(tree)
+
+dataset.foreach(fcn, debug=True)
