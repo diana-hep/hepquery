@@ -351,3 +351,35 @@ print dataset.branch2array("Muon.pt", False)
 #     for muon in event.Muon:        
 # IndexError: index 98580 is out of bounds for axis 0 with size 98580
 
+# BEFORE:
+
+# def fcn(tree):
+#     out = 0.0
+#     for event in tree:
+#         print 'event'event
+#         for muon in event.Muon:
+#             print 'muon'muon
+#             out += muon.pt
+#             print 'muon.pt'muon.pt
+#     return out
+
+# AFTER:
+
+# def fcn(array_0, array_1, array_2):
+#     out = 0.0
+#     for event in range(array_0[1]):    
+#         print 'event'event
+#         for muon in range(array_1[event], array_1[(event + 1)]):        
+#             print 'muon'muon
+#             out += array_2[muon]
+#             print 'muon.pt'array_2[muon]
+#     return out
+
+# array_0 -->     Events-Lo
+# array_1 -->     Events-Ld-R_Muon-Lo
+# array_2 -->     Events-Ld-R_Muon-Ld-R_pt
+# 98581
+# [    0     2     2 ..., 87276 87278 87278]
+# 87278
+# [ 68.38548279  22.29998589  44.98331451 ...,   3.0072403   65.3924942
+#   20.08810425]
