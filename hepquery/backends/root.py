@@ -241,10 +241,10 @@ class ROOTDataset(object):
             if arrayname == toparrayname:
                 fcnargs.append(toparray)
             else:
-                fcnargs.append(self.branch2array(column2branch[column], arrayname.isListOffset))
+                fcnargs.append(self.branch2array(column2branch[column], len(arrayname.path) > 0 and arrayname.path[-1] == (ArrayName.LIST_OFFSET,)))
         fcnargs.extend(otherargs)
 
-        # cfcn(*fcnargs)
+        cfcn(*fcnargs)
         
 class ROOTDatasetFromTree(ROOTDataset):
     def __init__(self, tree, prefix=None, cache=None):
@@ -318,27 +318,26 @@ class ROOTDatasetFromFiles(ROOTDataset):
 
 
 
-def fcn(tree):
-    out = 0.0
+def fcn(tree, total):
     for event in tree:    
-        print "event", event
         for muon in event.Muon:        
-            print "muon", muon
-            out += muon.pt
-            print "muon.pt", muon.pt
-    return out
+            total[0] += muon.pt
 
-file = ROOT.TFile("/mnt/data/DYJetsToLL_M_50_HT_100to200_13TeV_2/DYJetsToLL_M_50_HT_100to200_13TeV_2_0.root")
+# file = ROOT.TFile("/mnt/data/DYJetsToLL_M_50_HT_100to200_13TeV_2/DYJetsToLL_M_50_HT_100to200_13TeV_2_0.root")
+file = ROOT.TFile("/uscmst1b_scratch/lpc1/3DayLifetime/pivarski/DYJetsToLL_M_50_HT_100to200_13TeV_2/DYJetsToLL_M_50_HT_100to200_13TeV_2_0.root")
 tree = file.Get("Events")
 
 dataset = ROOTDataset.fromtree(tree)
 
-dataset.foreach(fcn, debug=True)
+total = numpy.array([0.0], dtype=numpy.float32)
+dataset.foreach(fcn, total, debug=True)
 
-print len(dataset.branch2array("Muon", True))
-print dataset.branch2array("Muon", True)
-print len(dataset.branch2array("Muon.pt", False))
-print dataset.branch2array("Muon.pt", False)
+print total[0], dataset.branch2array("Muon.pt", False).sum(), (total[0] - dataset.branch2array("Muon.pt", False).sum()) / total[0]
+
+# print len(dataset.branch2array("Muon", True))
+# print dataset.branch2array("Muon", True)
+# print len(dataset.branch2array("Muon.pt", False))
+# print dataset.branch2array("Muon.pt", False)
 
 # event 98579
 # Traceback (most recent call last):
@@ -351,28 +350,28 @@ print dataset.branch2array("Muon.pt", False)
 #     for muon in event.Muon:        
 # IndexError: index 98580 is out of bounds for axis 0 with size 98580
 
-# BEFORE:
+# # BEFORE:
 
 # def fcn(tree):
 #     out = 0.0
 #     for event in tree:
-#         print 'event'event
+#         print 'event', event
 #         for muon in event.Muon:
-#             print 'muon'muon
+#             print 'muon', muon
 #             out += muon.pt
-#             print 'muon.pt'muon.pt
+#             print 'muon.pt', muon.pt
 #     return out
 
-# AFTER:
+# # AFTER:
 
 # def fcn(array_0, array_1, array_2):
 #     out = 0.0
 #     for event in range(array_0[1]):    
-#         print 'event'event
+#         print 'event', event
 #         for muon in range(array_1[event], array_1[(event + 1)]):        
-#             print 'muon'muon
+#             print 'muon', muon
 #             out += array_2[muon]
-#             print 'muon.pt'array_2[muon]
+#             print 'muon.pt', array_2[muon]
 #     return out
 
 # array_0 -->     Events-Lo
