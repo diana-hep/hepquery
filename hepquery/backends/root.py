@@ -17,6 +17,7 @@
 from types import MethodType
 import glob
 import os
+import sys
 import time
 
 import ROOT
@@ -157,11 +158,10 @@ class ROOTDataset(object):
         return tpe, prefix
 
     def compile(self, fcn, paramtypes={}, environment={}, numba=None, debug=False):
-        cfcn, columns = plur.compile.code.local(fcn, paramtypes, environment, numba, debug)
         column2branch = {}
 
         def recurse(tpe):
-            if tpe.column in columns and tpe.branch is not None:
+            if tpe.column is not None and tpe.branch is not None:
                 column2branch[tpe.column] = tpe.branch
             # P
             if isinstance(tpe, Primitive):
@@ -181,6 +181,8 @@ class ROOTDataset(object):
                 raise "unexpected type object: {0}".format(tpe)
 
         recurse(self.type)
+
+        cfcn, columns = plur.compile.code.local(fcn, paramtypes, environment, numba, debug, column2branch)
         return cfcn, columns, column2branch
 
     def branch2array(self, branchname, count2offset=False):
@@ -222,20 +224,33 @@ class ROOTDataset(object):
 
     def foreach(self, fcn, *otherargs, **options):
         debug = options.get("debug", False)
+        if debug:
+            totalopen = 0.0
+            totalio = 0.0
+            totalrun = 0.0
+            stopwatch1 = time.time()
 
         cfcn, columns, column2branch = self.compile(fcn, (self.type,), **options)
         arraynames = [ArrayName.parse(c, self.prefix) for c in columns]
 
-        toparrayname = ArrayName(self.prefix).toListOffset()
-        toparray = numpy.array([0, self.tree.GetEntries()], dtype=numpy.int64)
-
         if debug:
             print("")
+            longestline = 0
+
+        toparrayname = ArrayName(self.prefix).toListOffset()
+        toparray = numpy.array([0, self.tree.GetEntries()], dtype=numpy.int64)
 
         self._rewind()
         while self._hasnext():
             if debug:
-                starttime = time.time()
+                stopwatch2 = time.time()
+
+            self._next()
+
+            if debug:
+                stopwatch3 = time.time()
+
+            toparray[1] = self.tree.GetEntries()
 
             fcnargs = []
             totalBytes = 0
@@ -250,40 +265,65 @@ class ROOTDataset(object):
             fcnargs.extend(otherargs)
 
             if debug:
-                iotime = time.time()
+                stopwatch4 = time.time()
 
-            cfcn(*fcnargs)
+            try:
+                cfcn(*fcnargs)
+            except:
+                sys.stderr.write("Failed while processing \"{0}\"\n".format(self._identity()))
+                raise
 
             if debug:
-                runtime = time.time()
-                print("{0:3d}% done; load: {1:.3f} MB/s, compute: {2:.3f} MHz".format(
-                    int(round(self._percent())),
-                    totalBytes/(iotime - starttime)/1024**2,
-                    toparray[1]/(runtime - iotime)/1e6))
+                stopwatch5 = time.time()
 
-            self._next()
-        
+                line = "{0:3d}% done; reading: {1:.3f} MB/s, computing: {2:.3f} MHz ({3})".format(
+                    int(round(self._percent())),
+                    totalBytes/(stopwatch4 - stopwatch3)/1024**2,
+                    toparray[1]/(stopwatch5 - stopwatch4)/1e6,
+                    "..." + self._identity()[-26:] if len(self._identity()) > 29 else self._identity())
+                print(line)
+                longestline = max(longestline, len(line))
+
+                totalopen += stopwatch3 - stopwatch2
+                totalio += stopwatch4 - stopwatch3
+                totalrun += stopwatch5 - stopwatch4
+
+        if debug:
+            print("=" * longestline)
+            print("""
+total time opening files: {0:.3f} sec
+                 reading: {1:.3f} sec
+               computing: {2:.3f} sec
+
+    from start to finish: {3:.3f} sec""".format(totalopen, totalio, totalrun, time.time() - stopwatch1).lstrip())
+
 class ROOTDatasetFromTree(ROOTDataset):
     def __init__(self, tree, prefix=None, cache=None):
         self.tree = tree
         if not self.tree:
             raise IOError("tree not valid")
 
+        self._rewind()
+        self._next()
+
         self.type, self.prefix = self.tree2type(self.tree, prefix)
         self.cache = cache
 
     def _rewind(self):
-        self._done = False
+        self._dummyindex = 0
 
     def _hasnext(self):
-        return not self._done
+        return self._dummyindex < 1
 
     def _next(self):
         if not self._hasnext(): raise StopIteration
-        self._done = True
+        self._dummyindex += 1
 
     def _percent(self):
-        return 100.0
+        return 0.0 if self._dummyindex == 0 else 100.0
+
+    def _identity(self):
+        return self.tree.GetName()
 
 class ROOTDatasetFromChain(ROOTDataset):
     def __init__(self, chain, prefix=None, cache=None):
@@ -300,6 +340,7 @@ class ROOTDatasetFromChain(ROOTDataset):
     def _rewind(self):
         self._treeindex = 0
         self._entryindex = 0
+        self._filename = ""
 
     def _hasnext(self):
         return self._treeindex < self.chain.GetNtrees()
@@ -308,18 +349,23 @@ class ROOTDatasetFromChain(ROOTDataset):
         if not self._hasnext(): raise StopIteration
         self.chain.LoadTree(self._entryindex)
         self.tree = self.chain.GetTree()
+
+        self._filename = self.chain.GetFile().GetName()
         if not self.tree:
             raise IOError("tree number {0} not valid in TChain".format(self._treeindex))
         self._treeindex += 1
-        self._entryindex += self.chain.GetEntries()
+        self._entryindex += self.tree.GetEntries()
 
     def _percent(self):
         return 100.0 * self._treeindex / self.chain.GetNtrees()
 
+    def _identity(self):
+        return self._filename
+
 class ROOTDatasetFromFiles(ROOTDataset):
     def __init__(self, treepath, filepaths, prefix=None, cache=None):
         self.treepath = treepath
-        self.filepaths = [y for x in filepaths for y in glob.glob(os.path.expanduser(x))]
+        self.filepaths = [y for x in filepaths for y in sorted(glob.glob(os.path.expanduser(x)))]
 
         self._rewind()
         if not self._hasnext():
@@ -331,6 +377,7 @@ class ROOTDatasetFromFiles(ROOTDataset):
 
     def _rewind(self):
         self._fileindex = 0
+        self._filename = ""
 
     def _hasnext(self):
         return self._fileindex < len(self.filepaths)
@@ -341,9 +388,13 @@ class ROOTDatasetFromFiles(ROOTDataset):
         if not self.file or self.file.IsZombie():
             raise IOError("could not read file \"{0}\"".format(self.filepaths[self._fileindex]))
         self.tree = self.file.Get(self.treepath)
+        self._filename = self.filepaths[self._fileindex]
         if not self.tree:
             raise IOError("tree \"{0}\" not found in file \"{1}\"".format(self.treepath, self.filepaths[self._fileindex]))
         self._fileindex += 1
 
     def _percent(self):
         return 100.0 * self._fileindex / len(self.filepaths)
+
+    def _identity(self):
+        return self._filename
