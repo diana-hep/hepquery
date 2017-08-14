@@ -20,7 +20,10 @@ import math
 import re
 
 class Cache(object):
-    def __init__(self, directory, limitbytes, maxperdir=1000, delimiter="."):
+    def __init__(self, *args, **kwds):
+        raise TypeError("use Cache.overwrite or Cache.adopt to create a Cache")
+        
+    def _init(self, directory, limitbytes, maxperdir=1000, delimiter="."):
         self.directory = directory
         self.limitbytes = limitbytes
         self.maxperdir = maxperdir
@@ -32,18 +35,35 @@ class Cache(object):
         self.depth = 0
         self.number = 0
 
+        self.users = 0
+        
     @staticmethod
     def overwrite(directory, limitbytes, maxperdir=1000, delimiter="."):
         if os.path.exists(directory):
             shutil.rmtree(directory)
         os.mkdir(directory)
-        return Cache(directory, limitbytes, maxperdir, delimiter)
+
+        out = Cache.__new__(Cache)
+        out._init(directory, limitbytes, maxperdir, delimiter)
+        return out
 
     @staticmethod
     def adopt(directory, limitbytes, maxperdir=1000, delimiter="."):
-        out = Cache(directory, limitbytes, maxperdir, delimiter)
+        if not os.path.exists(directory):
+            os.mkdir(directory)
+
+        if not os.path.isdir(directory):
+            raise IOError("path {0} is not a directory".format(directory))
+
+        out = Cache.__new__(Cache)
+        out._init(directory, limitbytes, maxperdir, delimiter)
         out.depth = None
         out.number = None
+
+        # clear out old user working directories
+        for item in os.listdir(directory):
+            if item.startswith("user-"):
+                shutil.rmtree(os.path.join(directory, item))
 
         digits = re.compile("^[0-9]{" + str(int(math.ceil(math.log(maxperdir, 10)))) + "}$")
         def recurse(d, n, path):
@@ -79,8 +99,19 @@ class Cache(object):
                 assert False, "directory contents must all be directories (named /{0}/ because maxperdir is {1}) or all be files:\n\n    {2}".format(digits.pattern, maxperdir, path)
 
         recurse(0, 0, "")
-        out.number += 1
+        if out.depth is None and out.number is None:
+            out.depth = 0
+            out.number = 0
+        else:
+            out.number += 1
+
         return out
+
+    def newuser(self):
+        dirname = os.path.join(self.directory, "user-{0}".format(self.users))
+        os.mkdir(dirname)
+        self.users += 1
+        return dirname
 
     def newfile(self, name, oldfilename):
         newbytes = os.path.getsize(oldfilename)
@@ -178,7 +209,7 @@ class Cache(object):
             tmp = os.path.join(self.directory, "tmp")
             os.mkdir(tmp)
             for fn in os.listdir(self.directory):
-                if fn != "tmp":
+                if fn != "tmp" and not fn.startswith("user-"):
                     os.rename(os.path.join(self.directory, fn), os.path.join(tmp, fn))
 
             prefix = self._formatter.format(0)

@@ -44,7 +44,7 @@ class ROOTDataset(object):
         return ROOTDatasetFromFiles(treepath, filepaths, **options)
 
     def __init__(self):
-        raise TypeError("use a factory method: fromtree, fromchain, fromfiles")
+        raise TypeError("use ROOTDataset.fromtree, ROOTDataset.fromchain, or ROOTDataset.fromfiles to create a ROOTDataset")
 
     @staticmethod
     def normalizename(name):
@@ -95,6 +95,7 @@ class ROOTDataset(object):
                     out = withrepr(Primitive(dtype), copy=True)
                     out.column = name.str()
                     out.branch = branch.GetName()
+                    out.dtype = out.of
                     return out
 
                 except NotImplementedError:
@@ -125,9 +126,11 @@ class ROOTDataset(object):
                 out = List(Record(**fields))
                 out.of.column = None
                 out.of.branch = None
+                out.of.dtype = None
 
                 out.column = name.toListOffset().str()
                 out.branch = branch.GetName()
+                out.dtype = ROOTDataset.branch2dtype(branch)
                 return out
 
             else:
@@ -138,6 +141,7 @@ class ROOTDataset(object):
                 out = Record(**fields)
                 out.column = None
                 out.branch = None
+                out.dtype = None
                 return out
 
         name = ArrayName(prefix, delimiter=delimiter)
@@ -153,16 +157,21 @@ class ROOTDataset(object):
         tpe = List(Record(**fields))
         tpe.of.column = None
         tpe.of.branch = None
+        tpe.of.dtype = None
         tpe.column = name.toListOffset().str()
         tpe.branch = None
+        tpe.dtype = int64.of
         return tpe, prefix
 
     def compile(self, fcn, paramtypes={}, environment={}, numba=None, debug=False):
         column2branch = {}
+        column2dtype = {}
 
         def recurse(tpe):
             if tpe.column is not None and tpe.branch is not None:
                 column2branch[tpe.column] = tpe.branch
+            if tpe.column is not None and tpe.dtype is not None:
+                column2dtype[tpe.column] = tpe.dtype
             # P
             if isinstance(tpe, Primitive):
                 pass
@@ -183,7 +192,7 @@ class ROOTDataset(object):
         recurse(self.type)
 
         cfcn, columns = plur.compile.code.local(fcn, paramtypes, environment, numba, debug, column2branch)
-        return cfcn, columns, column2branch
+        return cfcn, columns, column2branch, column2dtype
 
     def branch2array(self, branchname, count2offset=False):
         branch = self.tree.GetBranch(branchname)
@@ -222,50 +231,108 @@ class ROOTDataset(object):
 
         return array
 
-    def foreach(self, fcn, *otherargs, **options):
+    def foreachtree(self, fcn, *otherargs, **options):
         debug = options.get("debug", False)
         if debug:
             totalopen = 0.0
             totalio = 0.0
             totalrun = 0.0
+            totalentries = 0
+            totalbytes = 0
             stopwatch1 = time.time()
 
-        cfcn, columns, column2branch = self.compile(fcn, (self.type,), **options)
+        cfcn, columns, column2branch, column2dtype = self.compile(fcn, (self.type,), **options)
         arraynames = [ArrayName.parse(c, self.prefix) for c in columns]
-
+        
         if debug:
             print("")
             longestline = 0
 
         toparrayname = ArrayName(self.prefix).toListOffset()
-        toparray = numpy.array([0, self.tree.GetEntries()], dtype=numpy.int64)
+        toparray = numpy.array([0, 0], dtype=numpy.int64)
+
+        fcnargs = []
+        for column, arrayname in zip(columns, arraynames):
+            if arrayname == toparrayname:
+                array = toparray
+            else:
+                array = numpy.array([], dtype=column2dtype[column])
+            fcnargs.append(array)
+
+        fcnargs.extend(otherargs)
+        try:
+            cfcn(*fcnargs)
+        except:
+            sys.stderr.write("Failed to test-run function with empty arrays (to force compilation)\n")
+            raise
+
+        if debug:
+            stopwatch2 = time.time()
 
         self._rewind()
         while self._hasnext():
             if debug:
-                stopwatch2 = time.time()
-
-            self._next()
-
-            if debug:
                 stopwatch3 = time.time()
 
-            toparray[1] = self.tree.GetEntries()
-
-            fcnargs = []
-            totalBytes = 0
-            for column, arrayname in zip(columns, arraynames):
-                if arrayname == toparrayname:
-                    fcnargs.append(toparray)
-                else:
-                    array = self.branch2array(column2branch[column], len(arrayname.path) > 0 and arrayname.path[-1] == (ArrayName.LIST_OFFSET,))
-                    fcnargs.append(array)
-                    totalBytes += array.nbytes
-
-            fcnargs.extend(otherargs)
+            partition = self._partition()
+            self._next(self.cache is None or any(not self.cache.has("{0}.{1}.{2}".format(column, partition, column2dtype[column])) for column, arrayname in zip(columns, arraynames)))
 
             if debug:
                 stopwatch4 = time.time()
+
+            fcnargs = []
+            nbytes = 0
+            cachetotouch = []
+            for column, arrayname in zip(columns, arraynames):
+                array = None
+
+                if self.cache is not None:
+                    cachename = "{0}.{1}.{2}".format(column, partition, column2dtype[column])
+
+                    if self.cache.has(cachename):
+                        cachetotouch.append(cachename)
+
+                        tmpfilename = os.path.join(self.cacheuser, "tmp")
+                        try:
+                            self.cache.linkfile(cachename, tmpfilename)
+                            array = numpy.fromfile(open(tmpfilename, "rb"), dtype=column2dtype[column])
+                        finally:
+                            if os.path.exists(tmpfilename):
+                                os.remove(tmpfilename)
+
+                        if arrayname == toparrayname:
+                            toparray = array
+
+                if array is None:
+                    if arrayname == toparrayname:
+                        toparray[1] = self.tree.GetEntries()
+                        array = toparray
+                    else:
+                        array = self.branch2array(column2branch[column], len(arrayname.path) > 0 and arrayname.path[-1] == (ArrayName.LIST_OFFSET,))
+
+                    if self.cache is not None:
+                        try:
+                            tmpfilename = os.path.join(self.cacheuser, "tmp")
+                            array.tofile(open(tmpfilename, "wb"))
+                            self.cache.newfile(cachename, tmpfilename)
+                        finally:
+                            if os.path.exists(tmpfilename):
+                                os.remove(tmpfilename)
+
+                fcnargs.append(array)
+                nbytes += array.nbytes
+
+            nentries = toparray[1]
+            totalentries += nentries
+            totalbytes += nbytes
+
+            fcnargs.extend(otherargs)
+
+            if self.cache is not None:
+                self.cache.touch(*cachetotouch)
+
+            if debug:
+                stopwatch5 = time.time()
 
             try:
                 cfcn(*fcnargs)
@@ -274,28 +341,36 @@ class ROOTDataset(object):
                 raise
 
             if debug:
-                stopwatch5 = time.time()
+                stopwatch6 = time.time()
 
                 line = "{0:3d}% done; reading: {1:.3f} MB/s, computing: {2:.3f} MHz ({3})".format(
                     int(round(self._percent())),
-                    totalBytes/(stopwatch4 - stopwatch3)/1024**2,
-                    toparray[1]/(stopwatch5 - stopwatch4)/1e6,
+                    nbytes/(stopwatch5 - stopwatch4)/1024**2,
+                    toparray[1]/(stopwatch6 - stopwatch5)/1e6,
                     "..." + self._identity()[-26:] if len(self._identity()) > 29 else self._identity())
                 print(line)
                 longestline = max(longestline, len(line))
 
-                totalopen += stopwatch3 - stopwatch2
-                totalio += stopwatch4 - stopwatch3
-                totalrun += stopwatch5 - stopwatch4
+                totalopen += stopwatch4 - stopwatch3
+                totalio += stopwatch5 - stopwatch4
+                totalrun += stopwatch6 - stopwatch5
 
         if debug:
             print("=" * longestline)
             print("""
-total time opening files: {0:.3f} sec
-                 reading: {1:.3f} sec
-               computing: {2:.3f} sec
+total time spent compiling: {0:.3f} sec
+             opening files: {1:.3f} sec
+              reading data: {2:.3f} sec ({3:.3f} MB/s)
+                 computing: {4:.3f} sec ({5:.3f} MHz)
 
-    from start to finish: {3:.3f} sec""".format(totalopen, totalio, totalrun, time.time() - stopwatch1).lstrip())
+      from start to finish: {6:.3f} sec""".format(
+                stopwatch2 - stopwatch1,
+                totalopen,
+                totalio,
+                totalbytes/totalio/1024**2,
+                totalrun,
+                totalentries/totalrun/1e6,
+                time.time() - stopwatch1).lstrip())
 
 class ROOTDatasetFromTree(ROOTDataset):
     def __init__(self, tree, prefix=None, cache=None):
@@ -304,10 +379,12 @@ class ROOTDatasetFromTree(ROOTDataset):
             raise IOError("tree not valid")
 
         self._rewind()
-        self._next()
+        self._next(True)
 
         self.type, self.prefix = self.tree2type(self.tree, prefix)
         self.cache = cache
+        if cache is not None:
+            self.cacheuser = cache.newuser()
 
     def _rewind(self):
         self._dummyindex = 0
@@ -315,7 +392,7 @@ class ROOTDatasetFromTree(ROOTDataset):
     def _hasnext(self):
         return self._dummyindex < 1
 
-    def _next(self):
+    def _next(self, loadroot):
         if not self._hasnext(): raise StopIteration
         self._dummyindex += 1
 
@@ -325,6 +402,9 @@ class ROOTDatasetFromTree(ROOTDataset):
     def _identity(self):
         return self.tree.GetName()
 
+    def _partition(self):
+        return self._dummyindex
+
 class ROOTDatasetFromChain(ROOTDataset):
     def __init__(self, chain, prefix=None, cache=None):
         self.chain = chain
@@ -332,35 +412,46 @@ class ROOTDatasetFromChain(ROOTDataset):
         self._rewind()
         if not self._hasnext():
             raise IOError("empty TChain")
-        self._next()
+        self._next(True)
 
         self.type, self.prefix = self.tree2type(self.tree, prefix)
         self.cache = cache
+        if cache is not None:
+            self.cacheuser = cache.newuser()
 
     def _rewind(self):
-        self._treeindex = 0
-        self._entryindex = 0
         self._filename = ""
+        self._entryindex = 0
+        self._treeindex = 0
 
     def _hasnext(self):
         return self._treeindex < self.chain.GetNtrees()
 
-    def _next(self):
+    def _next(self, loadroot):
         if not self._hasnext(): raise StopIteration
-        self.chain.LoadTree(self._entryindex)
-        self.tree = self.chain.GetTree()
 
-        self._filename = self.chain.GetFile().GetName()
-        if not self.tree:
-            raise IOError("tree number {0} not valid in TChain".format(self._treeindex))
+        if loadroot:
+            self.chain.LoadTree(self._entryindex)
+            self.tree = self.chain.GetTree()
+            if not self.tree:
+                raise IOError("tree number {0} not valid in TChain".format(self._treeindex))
+            self._filename = self.chain.GetFile().GetName()
+            self._entryindex += self.tree.GetEntries()
+        else:
+            chainelement = self.chain.GetListOfFiles()[self._treeindex]
+            self._filename = chainelement.GetTitle()
+            self._entryindex += chainelement.GetEntries()
+
         self._treeindex += 1
-        self._entryindex += self.tree.GetEntries()
 
     def _percent(self):
         return 100.0 * self._treeindex / self.chain.GetNtrees()
 
     def _identity(self):
         return self._filename
+
+    def _partition(self):
+        return self._treeindex
 
 class ROOTDatasetFromFiles(ROOTDataset):
     def __init__(self, treepath, filepaths, prefix=None, cache=None):
@@ -370,10 +461,12 @@ class ROOTDatasetFromFiles(ROOTDataset):
         self._rewind()
         if not self._hasnext():
             raise IOError("empty file list")
-        self._next()
+        self._next(True)
 
         self.type, self.prefix = self.tree2type(self.tree, prefix)
         self.cache = cache
+        if cache is not None:
+            self.cacheuser = cache.newuser()
 
     def _rewind(self):
         self._fileindex = 0
@@ -382,15 +475,18 @@ class ROOTDatasetFromFiles(ROOTDataset):
     def _hasnext(self):
         return self._fileindex < len(self.filepaths)
 
-    def _next(self):
+    def _next(self, loadroot):
         if not self._hasnext(): raise StopIteration
-        self.file = ROOT.TFile(self.filepaths[self._fileindex])
-        if not self.file or self.file.IsZombie():
-            raise IOError("could not read file \"{0}\"".format(self.filepaths[self._fileindex]))
-        self.tree = self.file.Get(self.treepath)
+
+        if loadroot:
+            self.file = ROOT.TFile(self.filepaths[self._fileindex])
+            if not self.file or self.file.IsZombie():
+                raise IOError("could not read file \"{0}\"".format(self.filepaths[self._fileindex]))
+            self.tree = self.file.Get(self.treepath)
+            if not self.tree:
+                raise IOError("tree \"{0}\" not found in file \"{1}\"".format(self.treepath, self.filepaths[self._fileindex]))
+
         self._filename = self.filepaths[self._fileindex]
-        if not self.tree:
-            raise IOError("tree \"{0}\" not found in file \"{1}\"".format(self.treepath, self.filepaths[self._fileindex]))
         self._fileindex += 1
 
     def _percent(self):
@@ -398,3 +494,6 @@ class ROOTDatasetFromFiles(ROOTDataset):
 
     def _identity(self):
         return self._filename
+
+    def _partition(self):
+        return self._fileindex
