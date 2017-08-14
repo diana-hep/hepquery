@@ -378,6 +378,60 @@ total time spent compiling: {0:.3f} sec
                 self.array = ROOTDataset.branch2array(self.tree, self.branchname, self.count2offset)
             return self.array[i - self.start]
 
+    def __getitem__(self, entry):
+        if isinstance(entry, slice):
+            if entry.step is None:
+                step = 1
+            else:
+                step = entry.step
+
+            if step == 0:
+                raise ValueError("slice step cannot be zero")
+            elif step < 0:
+                raise NotImplementedError("negative slice steps are not supported yet")
+
+            if entry.start is None:
+                start = 0
+            else:
+                start = entry.start
+
+            if entry.stop is None:
+                raise NotImplementedError("slices without an upper bound are not supported yet")
+            else:
+                stop = entry.stop
+
+            return [self[i] for i in range(start, stop, step)]
+
+        if entry < 0:
+            raise NotImplementedError("negative indexes are not supported yet")
+
+        if not hasattr(self, "_start2lazyarrays"):
+            self._start2lazyarrays = {}
+
+        tree, start = self._findentry(entry)
+
+        if start in self._start2lazyarrays:
+            lazyarrays = self._start2lazyarrays[start]
+
+        else:
+            toparrayname = ArrayName(self.prefix).toListOffset()
+
+            lazyarrays = {}
+            for column, branchname in self._column2branch.items():
+                arrayname = ArrayName.parse(column, self.prefix)
+                if arrayname == toparrayname:
+                    array = numpy.array([0, self.tree.GetEntries()], dtype=numpy.int64)
+                else:
+                    array = self.LazyArray(self.tree, branchname, 0, len(arrayname.path) > 0 and arrayname.path[-1] == (ArrayName.LIST_OFFSET,))
+
+                lazyarrays[column] = array
+
+            self._start2lazyarrays[start] = lazyarrays
+
+        plur = fromarrays(self.prefix, lazyarrays, tpe=self.type)[i]
+        plur.__repr__ = ROOTDataset._RecordRepr
+        return plur
+
 class ROOTDatasetFromTree(ROOTDataset):
     def __init__(self, tree, prefix=None, cache=None):
         self.tree = tree
@@ -410,6 +464,9 @@ class ROOTDatasetFromTree(ROOTDataset):
 
     def _partition(self):
         return self._dummyindex
+
+    def _findentry(self, entry):
+        return self.tree, 0
 
 class ROOTDatasetFromChain(ROOTDataset):
     def __init__(self, chain, prefix=None, cache=None):
@@ -459,6 +516,13 @@ class ROOTDatasetFromChain(ROOTDataset):
     def _partition(self):
         return self._treeindex
 
+    def _findentry(self, entry):
+        subentry = self.chain.LoadTree(entry)
+        self.tree = self.chain.GetTree()
+        if not self.tree:
+            raise IOError("tree for entry {0} not valid in TChain".format(entry))
+        return self.tree, entry - subentry
+
 class ROOTDatasetFromFiles(ROOTDataset):
     def __init__(self, treepath, filepaths, prefix=None, cache=None):
         self.treepath = treepath
@@ -504,17 +568,35 @@ class ROOTDatasetFromFiles(ROOTDataset):
     def _partition(self):
         return self._fileindex
 
-    def __getitem__(self, i):
-        toparrayname = ArrayName(self.prefix).toListOffset()
+    def _findentry(self, entry):
+        if not hasattr(self, "_numentries"):
+            self._numentries = []
 
-        lazyarrays = {}
-        for column, branchname in self._column2branch.items():
-            arrayname = ArrayName.parse(column, self.prefix)
-            if arrayname == toparrayname:
-                array = numpy.array([0, self.tree.GetEntries()], dtype=numpy.int64)
+        oldfileindex = self._fileindex
+
+        firstentry = 0
+        lastentry = 0
+        self._rewind()
+        while self._hasnext():
+            if self._fileindex < len(self._numentries):
+                numentries = self._numentries[self._fileindex]
+
+                lastentry += numentries
+                if entry < lastentry:
+                    self._next(self._fileindex != oldfileindex)
+                    return self.tree, firstentry
+                else:
+                    self._next(False)
+
             else:
-                array = self.LazyArray(self.tree, branchname, 0, len(arrayname.path) > 0 and arrayname.path[-1] == (ArrayName.LIST_OFFSET,))
+                self._next(True)
+                numentries = self.tree.GetEntries()
+                self._numentries.append(numentries)
 
-            lazyarrays[column] = array
-            
-        return fromarrays(self.prefix, lazyarrays, tpe=self.type)[i]
+                lastentry += numentries
+                if entry < lastentry:
+                    return self.tree, firstentry
+
+            firstentry += numentries
+
+        raise IndexError("ROOTDataset index {0} out of range ({1})".format(entry, lastentry))
