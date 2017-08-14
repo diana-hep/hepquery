@@ -9,7 +9,7 @@ from hepquery.backends.root import ROOTDataset
 
 cache = Cache.adopt("/mnt/cache", 100*1024**3)
 
-dataset = ROOTDataset.fromfiles("Events", "/mnt/data/DYJetsToLL_*/*.root", cache=cache)
+dataset = ROOTDataset.fromfiles("Events", "/mnt/data/DYJetsToLL*/*.root", cache=cache)
 
 # chain = ROOT.TChain("Events")
 # for filename in sorted(glob.glob("/mnt/data/DYJetsToLL*/*.root")):

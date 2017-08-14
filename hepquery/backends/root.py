@@ -384,7 +384,7 @@ class ROOTDatasetFromTree(ROOTDataset):
         self.type, self.prefix = self.tree2type(self.tree, prefix)
         self.cache = cache
         if cache is not None:
-            self.cacheuser = cache.newuser()
+            self.cacheuser = cache.newuser({self.prefix: [{"file": tree.GetFile().GetName(), "tree": tree.GetName()}]})
 
     def _rewind(self):
         self._dummyindex = 0
@@ -417,7 +417,7 @@ class ROOTDatasetFromChain(ROOTDataset):
         self.type, self.prefix = self.tree2type(self.tree, prefix)
         self.cache = cache
         if cache is not None:
-            self.cacheuser = cache.newuser()
+            self.cacheuser = cache.newuser({self.prefix: [{"file": x.GetTitle(), "tree": x.GetName()} for x in self.chain.GetListOfFiles()]})
 
     def _rewind(self):
         self._filename = ""
@@ -466,7 +466,7 @@ class ROOTDatasetFromFiles(ROOTDataset):
         self.type, self.prefix = self.tree2type(self.tree, prefix)
         self.cache = cache
         if cache is not None:
-            self.cacheuser = cache.newuser()
+            self.cacheuser = cache.newuser({self.prefix: [{"file": x, "tree": self.treepath} for x in self.filepaths]})
 
     def _rewind(self):
         self._fileindex = 0
