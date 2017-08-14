@@ -9,14 +9,14 @@ from hepquery.backends.root import ROOTDataset
 
 cache = Cache.adopt("/mnt/cache", 100*1024**3)
 
-dataset = ROOTDataset.fromfiles("Events", "/mnt/data/DYJetsToLL*/*.root", cache=cache)
+dataset = ROOTDataset.fromfiles("Events", "/mnt/data/uncompressed/DYJetsToLL*/*.root", cache=cache)
 
 # chain = ROOT.TChain("Events")
 # for filename in sorted(glob.glob("/mnt/data/DYJetsToLL*/*.root")):
 #     chain.Add(filename)
 # dataset = ROOTDataset.fromchain(chain, cache=cache)
 
-histogram = numpy.zeros(100, dtype=numpy.int64)
+histogram = numpy.zeros(100, dtype=numpy.int32)
 
 def fcn(tree, histogram):
     for event in tree:    

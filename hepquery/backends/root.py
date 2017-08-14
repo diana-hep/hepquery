@@ -360,15 +360,17 @@ class ROOTDataset(object):
             print("""
 total time spent compiling: {0:.3f} sec
              opening files: {1:.3f} sec
-              reading data: {2:.3f} sec ({3:.3f} MB/s)
-                 computing: {4:.3f} sec ({5:.3f} MHz)
+              reading data: {2:.3f} sec ({3:.3f} MB --> {4:.3f} MB/s)
+                 computing: {5:.3f} sec ({6:d} entries --> {7:.3f} MHz)
 
       from start to finish: {6:.3f} sec""".format(
                 stopwatch2 - stopwatch1,
                 totalopen,
                 totalio,
+                totalbytes/1024.0**2,
                 totalbytes/totalio/1024**2,
                 totalrun,
+                totalentries,
                 totalentries/totalrun/1e6,
                 time.time() - stopwatch1).lstrip())
 
