@@ -45,15 +45,6 @@ class ROOTDataset(object):
     def __init__(self):
         raise TypeError("use a factory method: fromtree, fromchain, fromfiles")
 
-    def _rewind(self):
-        pass
-
-    def _hasnext(self):
-        pass
-
-    def _next(self):
-        pass
-
     @staticmethod
     def normalizename(name):
         return name    # FIXME!
@@ -230,21 +221,47 @@ class ROOTDataset(object):
         return array
 
     def foreach(self, fcn, *otherargs, **options):
+        debug = options.get("debug", False)
+
         cfcn, columns, column2branch = self.compile(fcn, (self.type,), **options)
         arraynames = [ArrayName.parse(c, self.prefix) for c in columns]
 
         toparrayname = ArrayName(self.prefix).toListOffset()
         toparray = numpy.array([0, self.tree.GetEntries()], dtype=numpy.int64)
 
-        fcnargs = []
-        for column, arrayname in zip(columns, arraynames):
-            if arrayname == toparrayname:
-                fcnargs.append(toparray)
-            else:
-                fcnargs.append(self.branch2array(column2branch[column], len(arrayname.path) > 0 and arrayname.path[-1] == (ArrayName.LIST_OFFSET,)))
-        fcnargs.extend(otherargs)
+        if debug:
+            print("")
 
-        cfcn(*fcnargs)
+        self._rewind()
+        while self._hasnext():
+            if debug:
+                starttime = time.time()
+
+            fcnargs = []
+            totalBytes = 0
+            for column, arrayname in zip(columns, arraynames):
+                if arrayname == toparrayname:
+                    fcnargs.append(toparray)
+                else:
+                    array = self.branch2array(column2branch[column], len(arrayname.path) > 0 and arrayname.path[-1] == (ArrayName.LIST_OFFSET,))
+                    fcnargs.append(array)
+                    totalBytes += array.nbytes
+
+            fcnargs.extend(otherargs)
+
+            if debug:
+                iotime = time.time()
+
+            cfcn(*fcnargs)
+
+            if debug:
+                runtime = time.time()
+                print("{0:3d}% done; load: {1:.3f} MB/s, compute: {2:.3f} MHz".format(
+                    int(round(self._percent())),
+                    totalBytes/(iotime - starttime)/1024**2,
+                    toparray[1]/(runtime - iotime)/1e6))
+
+            self._next()
         
 class ROOTDatasetFromTree(ROOTDataset):
     def __init__(self, tree, prefix=None, cache=None):
@@ -254,6 +271,19 @@ class ROOTDatasetFromTree(ROOTDataset):
 
         self.type, self.prefix = self.tree2type(self.tree, prefix)
         self.cache = cache
+
+    def _rewind(self):
+        self._done = False
+
+    def _hasnext(self):
+        return not self._done
+
+    def _next(self):
+        if not self._hasnext(): raise StopIteration
+        self._done = True
+
+    def _percent(self):
+        return 100.0
 
 class ROOTDatasetFromChain(ROOTDataset):
     def __init__(self, chain, prefix=None, cache=None):
@@ -283,6 +313,9 @@ class ROOTDatasetFromChain(ROOTDataset):
         self._treeindex += 1
         self._entryindex += self.chain.GetEntries()
 
+    def _percent(self):
+        return 100.0 * self._treeindex / self.chain.GetNtrees()
+
 class ROOTDatasetFromFiles(ROOTDataset):
     def __init__(self, treepath, filepaths, prefix=None, cache=None):
         self.treepath = treepath
@@ -307,78 +340,10 @@ class ROOTDatasetFromFiles(ROOTDataset):
         self.file = ROOT.TFile(self.filepaths[self._fileindex])
         if not self.file or self.file.IsZombie():
             raise IOError("could not read file \"{0}\"".format(self.filepaths[self._fileindex]))
-        self.tree = self.file(self.treepath)
+        self.tree = self.file.Get(self.treepath)
         if not self.tree:
             raise IOError("tree \"{0}\" not found in file \"{1}\"".format(self.treepath, self.filepaths[self._fileindex]))
         self._fileindex += 1
 
-
-
-
-
-
-
-def fcn(tree, total):
-    for event in tree:    
-        for muon in event.Muon:        
-            total[0] += muon.pt
-
-# file = ROOT.TFile("/mnt/data/DYJetsToLL_M_50_HT_100to200_13TeV_2/DYJetsToLL_M_50_HT_100to200_13TeV_2_0.root")
-file = ROOT.TFile("/uscmst1b_scratch/lpc1/3DayLifetime/pivarski/DYJetsToLL_M_50_HT_100to200_13TeV_2/DYJetsToLL_M_50_HT_100to200_13TeV_2_0.root")
-tree = file.Get("Events")
-
-dataset = ROOTDataset.fromtree(tree)
-
-total = numpy.array([0.0], dtype=numpy.float32)
-dataset.foreach(fcn, total, debug=True)
-
-print total[0], dataset.branch2array("Muon.pt", False).sum(), (total[0] - dataset.branch2array("Muon.pt", False).sum()) / total[0]
-
-# print len(dataset.branch2array("Muon", True))
-# print dataset.branch2array("Muon", True)
-# print len(dataset.branch2array("Muon.pt", False))
-# print dataset.branch2array("Muon.pt", False)
-
-# event 98579
-# Traceback (most recent call last):
-#   File "<string>", line 1, in <module>
-#   File "hepquery/backends/root.py", line 336, in <module>
-#     dataset.foreach(fcn, debug=True)
-#   File "hepquery/backends/root.py", line 247, in foreach
-#     cfcn(*fcnargs)
-#   File "hepquery/backends/root.py", line 325, in fcn
-#     for muon in event.Muon:        
-# IndexError: index 98580 is out of bounds for axis 0 with size 98580
-
-# # BEFORE:
-
-# def fcn(tree):
-#     out = 0.0
-#     for event in tree:
-#         print 'event', event
-#         for muon in event.Muon:
-#             print 'muon', muon
-#             out += muon.pt
-#             print 'muon.pt', muon.pt
-#     return out
-
-# # AFTER:
-
-# def fcn(array_0, array_1, array_2):
-#     out = 0.0
-#     for event in range(array_0[1]):    
-#         print 'event', event
-#         for muon in range(array_1[event], array_1[(event + 1)]):        
-#             print 'muon', muon
-#             out += array_2[muon]
-#             print 'muon.pt', array_2[muon]
-#     return out
-
-# array_0 -->     Events-Lo
-# array_1 -->     Events-Ld-R_Muon-Lo
-# array_2 -->     Events-Ld-R_Muon-Ld-R_pt
-# 98581
-# [    0     2     2 ..., 87276 87278 87278]
-# 87278
-# [ 68.38548279  22.29998589  44.98331451 ...,   3.0072403   65.3924942
-#   20.08810425]
+    def _percent(self):
+        return 100.0 * self._fileindex / len(self.filepaths)
