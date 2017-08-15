@@ -28,13 +28,13 @@ Although it's in the early stages of development, you can check out and run some
 
    4. **Not** Femtocode; it is not necessary.
 
-   5. Finally, git-clone [Revision 41 of HEPQuery](https://github.com/diana-hep/hepquery/releases/tag/rev41) and install it with `python setup.py install --user`.
+   5. Finally, git-clone [Revision 42 of HEPQuery](https://github.com/diana-hep/hepquery/releases/tag/rev42) and install it with `python setup.py install --user`.
 
 On a Python command line, import two HEPQuery features:
 
 ```python
-from hepquery.backends.root import ROOTDataset
-from hepquery.cache import Cache
+>>> from hepquery.backends.root import ROOTDataset
+>> from hepquery.cache import Cache
 ```
 
 for loading data from ROOT and representing them as PLUR for calculations, optionally caching the PLUR for faster iteration.
@@ -42,26 +42,27 @@ for loading data from ROOT and representing them as PLUR for calculations, optio
 Next, create a 100 GB cache on some fast disk (SSD):
 
 ```python
-cache = Cache.adopt("/mnt/cache", 100*1024**3)
+>>> cache = Cache.adopt("/mnt/cache", 100*1024**3)
 ```
 
 and point to the ROOT data, backed by the cache:
 
 ```python
-dataset = ROOTDataset.fromfiles("Events", "/mnt/data/DYJetsToLL*/*.root", cache=cache)
+>>> dataset = ROOTDataset.fromfiles("Events", "/mnt/data/DYJetsToLL*/*.root", cache=cache)
 ```
 
 Create a "query" by defining a function to be executed on the data. The interface is a little rough right now; you have to write the function to be executed separately on each TTree in your sample. In the future, a suite of high-level functionals (map, filter, reduce) will be provided. (But this does demonstrate that the user _can_ control the for loop if that is ever important.)
 
 ```python
-histogram = numpy.zeros(100, dtype=numpy.int32)
+>>> histogram = numpy.zeros(100, dtype=numpy.int32)
 
-def fcn(tree, histogram):
-    for event in tree:
-        for muon in event.Muon:        # just fill a histogram of muon.pt
-            bin = int(muon.pt)
-            if bin >= 0 and bin < 100:
-                histogram[bin] += 1
+>>> def fcn(tree, histogram):
+...     for event in tree:
+...         for muon in event.Muon:        # just fill a histogram of muon.pt
+...             bin = int(muon.pt)
+...             if bin >= 0 and bin < 100:
+...                 histogram[bin] += 1
+...
 ```
 
 All mutable data must be passed in as an explicit argument, such as `histogram` here.
@@ -264,27 +265,26 @@ By tinkering on the command line, I computed dimuon masses and found many of the
 So I put _exactly this Python code_ into the sequential optimizer and ran over the 21.5 GB dataset in under a second, computing at a rate of 14 million events per second (single threaded).
 
 ```python
-histogram = numpy.zeros(100, dtype=numpy.int32)
+>>> histogram = numpy.zeros(100, dtype=numpy.int32)
 
-from math import *
-def fcn(tree, histogram):
-    for event in tree:
-        for i in range(len(event.Muon)):
-            for j in range(i + 1, len(event.Muon)):
-                mu1 = event.Muon[i]
-                mu2 = event.Muon[j]
-                mass = sqrt(2*mu1.pt*mu2.pt*(cosh(mu1.eta - mu2.eta) - cos(mu1.phi - mu2.phi)))
+>>> from math import *
+>>> def fcn(tree, histogram):
+...     for event in tree:
+...         for i in range(len(event.Muon)):
+...             for j in range(i + 1, len(event.Muon)):
+...                 mu1 = event.Muon[i]
+...                 mu2 = event.Muon[j]
+...                 mass = sqrt(2*mu1.pt*mu2.pt*(cosh(mu1.eta - mu2.eta) - cos(mu1.phi - mu2.phi)))
+...                 bin = int(mass)
+...                 if bin >= 0 and bin < 100:
+...                     histogram[bin] += 1
+...
 
-                bin = int(mass)
-                if bin >= 0 and bin < 100:
-                    histogram[bin] += 1
+>>> dataset.foreachtree(fcn, histogram, numba=True, debug=True,
+...                     environment={"sqrt": sqrt, "cosh": cosh, "cos": cos})
 
-dataset.foreachtree(fcn, histogram, numba=True, debug=True,
-                    environment={"sqrt": sqrt, "cosh": cosh, "cos": cos})
-
-print("")
-for i in range(100):
-    print("{0:8d} {1}".format(histogram[i], "*" * (80 * histogram[i] // histogram.max())))
+>>> for i in range(100):
+...     print("{0:8d} {1}".format(histogram[i], "*" * (80 * histogram[i] // histogram.max())))
 ```
 
 Again, apologies for the rough interface (having to explicitly pass math functions to the `environment` and lacking built-in histogramming). However, I hope you can see that this will be fast enough to do exploratory data analysis on unskimmed data, especially when parallelized.
