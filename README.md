@@ -12,7 +12,7 @@ Here is an old poster describing the motivation and feasibility studies.
 
 ![Femtocode poster](docs/pivarski-femtocode-poster.png)
 
-# Demo
+# Demo (of fast iteration with objects)
 
 Although it's in the early stages of development, you can check out and run some examples of HEPQuery. First get the dependencies:
 
@@ -53,7 +53,7 @@ and point to the ROOT data, backed by the cache:
 dataset = ROOTDataset.fromfiles("Events", "/mnt/data/DYJetsToLL*/*.root", cache=cache)
 ```
 
-Create a "query" by defining a function to be executed on the data. The interface is a little rough right now; you have to write the function to be executed separately on each TTree in your sample. In the future, a suite of high-level functionals (map, filter, reduce) will be provided. (But this _does_ demonstrate that random access is possible and efficient.)
+Create a "query" by defining a function to be executed on the data. The interface is a little rough right now; you have to write the function to be executed separately on each TTree in your sample. In the future, a suite of high-level functionals (map, filter, reduce) will be provided. (But this does demonstrate that the user _can_ control the for loop if that is ever important.)
 
 ```python
 histogram = numpy.zeros(100, dtype=numpy.int32)
@@ -116,16 +116,20 @@ total time spent compiling: 0.353 sec
       from start to finish: 0.734 sec
 ```
 
-For a fast SSD disk (top speed of 370 MB/s), you can expect single-threaded rates like
+Single-threaded rates like these:
 
 |   | cold files on disk  | files paged to RAM by OS |
 |:-:|:-------------------:|:------------------------:|
 | first read (from ROOT)  |  45 MB/s |  320 MB/s |
 | subsequent (from cache) | 185 MB/s | 1100 MB/s |
 
-If you turned on the cache, you'll find Numpy arrays in `/mnt/cache`. These are uncompressed and faster to load than ROOT branches, though the new BulkAPI feature is itself an order of magnitude faster than `TTree::Draw` (from files paged to RAM by OS).
+are not unusual in High Performance Computing (HPC) and database analyses of flat tables. But note that we are working with non-flat data: every event has a different number of muons, and we're iterating over these objects in Python code. (To see and control what the OS has paged into RAM, use [vmtouch](https://hoytech.com/vmtouch/).) For comparison, `TTree::Draw` fills the same histogram at a rate of 3 MB/s.
 
-The data representation has been designed for fast sequential access, but you can also work with data interactively for testing. It's slower, but quick enough for human feedback. (Like the sequential case, data are only pulled from files on demand.)
+The `BEFORE`/`AFTER` debugging messages provide a hint of what's going on here: the object-oriented iterators are being translated into pure array manipulations before compilation. These arrays are contiguous for each attribute (pt, eta, phi, etc.), so the compiler can highly optimize this code (see [PLUR](https://github.com/diana-hep/plur) for details).
+
+If you turned on the cache, you'll find Numpy arrays in `/mnt/cache`. These are uncompressed and faster to load than ROOT branches, even with the BulkAPI feature.
+
+Although this data representation was designed for fast sequential access, you can also work with data interactively for testing. It's slower, but quick enough for human feedback. (Like the sequential case, data are only pulled from files on demand.)
 
 ```python
 >>> first = dataset[0]
@@ -200,7 +204,7 @@ The data representation has been designed for fast sequential access, but you ca
 [<Muon at 0x8>, <Muon at 0x9>], [<Muon at 0xa>, <Muon at 0xb>]]
 ```
 
-# Why this is great
+# Why this is so great
 
 By tinkering on the command line, I computed dimuon masses and found many of them to be at the Z pole:
 
@@ -281,3 +285,7 @@ for i in range(100):
 ```
 
 Again, apologies for the rough interface (having to explicitly pass math functions to the `environment` and lacking built-in histogramming). However, I hope you can see that this will be fast enough to do exploratory data analysis on unskimmed data, especially when parallelized.
+
+# What's missing?
+
+Parallelization, of course! We need to distribute this process across a cluster and preferentially send subtasks to machines with the cache to run them faster. This is where Thanat's work on Zookeeper will come in.
