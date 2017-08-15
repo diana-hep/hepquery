@@ -120,7 +120,8 @@ The data representation has been designed for fast sequential access, but you ca
 >>> first = dataset[0]
 
 >>> first._fields
-['AK4CHS', 'AK4Puppi', 'AK8CHS', 'AddAK8CHS', 'AddCA15CHS', 'AddCA15Puppi', 'AddCA8Puppi', 'CA15CHS', 'CA15Puppi', 'CA8Puppi', 'Electron', 'GenEvtInfo', 'GenParticle', 'Info', 'Muon', 'PV', 'Photon', 'Tau']
+['AK4CHS', 'AK4Puppi', 'AK8CHS', 'AddAK8CHS', 'AddCA15CHS', 'AddCA15Puppi', 'AddCA8Puppi', 'CA15CHS',
+'CA15Puppi', 'CA8Puppi', 'Electron', 'GenEvtInfo', 'GenParticle', 'Info', 'Muon', 'PV', 'Photon', 'Tau']
 
 >>> first.Muon
 [<Muon at 0x0>, <Muon at 0x1>]
@@ -188,5 +189,84 @@ The data representation has been designed for fast sequential access, but you ca
 [<Muon at 0x8>, <Muon at 0x9>], [<Muon at 0xa>, <Muon at 0xb>]]
 ```
 
+# Why this is great
 
+By tinkering on the command line, I computed dimuon masses and found many of them to be at the Z pole:
 
+```python
+>>> from math import *
+>>> for event in dataset[:100]:
+...   for i in range(len(event.Muon)):
+...     for j in range(i + 1, len(event.Muon)):       # don't repeat muons!
+...       mu1 = event.Muon[i]
+...       mu2 = event.Muon[j]
+...       print(sqrt(2*mu1.pt*mu2.pt*(cosh(mu1.eta - mu2.eta) - cos(mu1.phi - mu2.phi))))
+...
+79.4338346557
+92.5052493945
+0.598194203213
+18.8711156173
+15.1082554054
+81.1394932173
+87.8975581394
+0.980486484959
+88.1068221632
+129.770271113
+16.3836532317
+19.843856908
+93.4938739107
+90.2348773065
+79.3163019793
+99.8607947969
+24.014843766
+91.4711202884
+12.4382808061
+38.7604436416
+2.94827494271
+170.118897504
+86.4521328047
+94.6742801779
+11.6830843263
+81.3369416087
+88.0011171039
+90.0088846793
+49.634896739
+25.0800349343
+1.92515639982
+131.469054102
+84.2063636711
+96.1914788068
+85.749143422
+7.59674671131
+111.24118453
+6.66398279986
+91.4703128558
+```
+
+So I put _exactly this Python code_ into the sequential optimizer and ran over all the data in under a second, at a rate of 14 million events per second (single threaded).
+
+```python
+histogram = numpy.zeros(100, dtype=numpy.int32)
+
+from math import *
+def fcn(tree, histogram):
+    for event in tree:
+        for i in range(len(event.Muon)):
+            for j in range(i + 1, len(event.Muon)):
+                mu1 = event.Muon[i]
+                mu2 = event.Muon[j]
+                mass = sqrt(2*mu1.pt*mu2.pt*(cosh(mu1.eta - mu2.eta) - cos(mu1.phi - mu2.phi)))
+
+                bin = int(mass)
+                if bin >= 0 and bin < 100:
+                    histogram[bin] += 1
+
+dataset.foreachtree(fcn, histogram, numba=True, debug=True,
+                    environment={"sqrt": sqrt, "cosh": cosh, "cos": cos})
+
+print("")
+for i in range(100):
+    print("{0:8d} {1}".format(histogram[i], "*" * (80 * histogram[i] // histogram.max())))
+```
+
+Again, apologies for the rough interface (having to explicitly pass math functions to the `environment` and lacking built-in histogramming). However, I hope you can see that this will be fast enough to do exploratory data analysis on unskimmed data, especially when parallelized.
