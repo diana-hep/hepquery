@@ -6,7 +6,8 @@ HEPQuery is a project to provide a fast, query-engine style interface to High En
    * [PLUR](https://github.com/diana-hep/plur) data representation
    * [Parallelization with Zookeeper](https://github.com/JThanat/femto-mesos/tree/master) Thanat's summer project (see also [his writeup](https://cds.cern.ch/record/2278211?ln=en))
 
-(`*`The Femtocode project is on hold while we develop the data representation and use [Numba-compiled Python](http://numba.pydata.org/) as a query language. Data representation should be independent of language for modularity.
+(`*`The Femtocode project is on hold while we develop the data representation and use [Numba-compiled Python](http://numba.pydata.org/) as a query language. Data representation should be independent of language for modularity.)
+
 Here is an old poster describing the motivation and feasibility studies.
 
 ![Femtocode poster](docs/pivarski-femtocode-poster.png)
