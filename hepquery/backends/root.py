@@ -378,59 +378,78 @@ total time spent compiling: {0:.3f} sec
                 self.array = ROOTDataset.branch2array(self.tree, self.branchname, self.count2offset)
             return self.array[i - self.start]
 
+    def _normalize(self, i, clip, step):
+        lenself = len(self)
+
+        if i < 0:
+            j = len(self) + i
+            if j < 0:
+                if clip:
+                    return 0 if step > 0 else lenself
+                else:
+                    raise IndexError("ROOTDataset index out of range: {0} for length {1}".format(i, lenself))
+            else:
+                return j
+
+        elif i < lenself:
+            return i
+
+        elif clip:
+            return lenself if step > 0 else 0
+
+        else:
+            raise IndexError("ROOTDataset index out of range: {0} for length {1}".format(i, lenself))
+
     def __getitem__(self, entry):
         if isinstance(entry, slice):
+            lenself = len(self)
+
             if entry.step is None:
                 step = 1
             else:
                 step = entry.step
-
             if step == 0:
                 raise ValueError("slice step cannot be zero")
-            elif step < 0:
-                raise NotImplementedError("negative slice steps are not supported yet")
 
             if entry.start is None:
-                start = 0
+                if step > 0:
+                    start = 0
+                else:
+                    start = lenself - 1
             else:
-                start = entry.start
+                start = self._normalize(entry.start, True, step)
 
             if entry.stop is None:
-                raise NotImplementedError("slices without an upper bound are not supported yet")
+                if step > 0:
+                    stop = lenself
+                else:
+                    stop = -1
             else:
-                stop = entry.stop
+                stop = self._normalize(entry.stop, True, step)
 
             return [self[i] for i in range(start, stop, step)]
 
-        if entry < 0:
-            raise NotImplementedError("negative indexes are not supported yet")
-
-        if not hasattr(self, "_start2lazyarrays"):
-            self._start2lazyarrays = {}
-
-        tree, start = self._findentry(entry)
-
-        if start in self._start2lazyarrays:
-            lazyarrays = self._start2lazyarrays[start]
-
         else:
-            toparrayname = ArrayName(self.prefix).toListOffset()
+            entry = self._normalize(entry, False, 1)
 
-            lazyarrays = {}
-            for column, branchname in self._column2branch.items():
-                arrayname = ArrayName.parse(column, self.prefix)
-                if arrayname == toparrayname:
-                    array = numpy.array([0, self.tree.GetEntries()], dtype=numpy.int64)
-                else:
-                    array = self.LazyArray(self.tree, branchname, 0, len(arrayname.path) > 0 and arrayname.path[-1] == (ArrayName.LIST_OFFSET,))
+            tree, start = self._findentry(entry)
 
-                lazyarrays[column] = array
+            if getattr(self, "_start", None) != start:
+                lazyarrays = {}
+                for column, branchname in self._column2branch.items():
+                    arrayname = ArrayName.parse(column, self.prefix)
 
-            self._start2lazyarrays[start] = lazyarrays
+                    if arrayname == ArrayName(self.prefix).toListOffset():
+                        array = numpy.array([0, tree.GetEntries()], dtype=numpy.int64)
+                    else:
+                        array = self.LazyArray(tree, branchname, 0, len(arrayname.path) > 0 and arrayname.path[-1] == (ArrayName.LIST_OFFSET,))
 
-        plur = fromarrays(self.prefix, lazyarrays, tpe=self.type)[i]
-        plur.__repr__ = ROOTDataset._RecordRepr
-        return plur
+                    lazyarrays[column] = array
+
+                self._start = start
+                self._plur = fromarrays(self.prefix, lazyarrays, tpe=self.type)
+
+            return self._plur[entry - start]
 
 class ROOTDatasetFromTree(ROOTDataset):
     def __init__(self, tree, prefix=None, cache=None):
@@ -467,6 +486,9 @@ class ROOTDatasetFromTree(ROOTDataset):
 
     def _findentry(self, entry):
         return self.tree, 0
+
+    def __len__(self):
+        return self.tree.GetEntries()
 
 class ROOTDatasetFromChain(ROOTDataset):
     def __init__(self, chain, prefix=None, cache=None):
@@ -518,10 +540,13 @@ class ROOTDatasetFromChain(ROOTDataset):
 
     def _findentry(self, entry):
         subentry = self.chain.LoadTree(entry)
-        self.tree = self.chain.GetTree()
-        if not self.tree:
+        tree = self.chain.GetTree()
+        if not tree:
             raise IOError("tree for entry {0} not valid in TChain".format(entry))
-        return self.tree, entry - subentry
+        return tree, entry - subentry
+
+    def __len__(self):
+        return self.chain.GetEntries()
 
 class ROOTDatasetFromFiles(ROOTDataset):
     def __init__(self, treepath, filepaths, prefix=None, cache=None):
@@ -538,6 +563,16 @@ class ROOTDatasetFromFiles(ROOTDataset):
         if cache is not None:
             self.cacheuser = cache.newuser({self.prefix: [{"file": x, "tree": self.treepath} for x in self.filepaths]})
 
+    def _gettree(self, filepath):
+        file = ROOT.TFile(filepath)
+        if not file or file.IsZombie():
+            raise IOError("could not read file \"{0}\"".format(filepath))
+
+        tree = file.Get(self.treepath)
+        if not tree:
+            raise IOError("tree \"{0}\" not found in file \"{1}\"".format(self.treepath, filepath))
+        return file, tree
+
     def _rewind(self):
         self._fileindex = 0
         self._filename = ""
@@ -549,12 +584,7 @@ class ROOTDatasetFromFiles(ROOTDataset):
         if not self._hasnext(): raise StopIteration
 
         if loadroot:
-            self.file = ROOT.TFile(self.filepaths[self._fileindex])
-            if not self.file or self.file.IsZombie():
-                raise IOError("could not read file \"{0}\"".format(self.filepaths[self._fileindex]))
-            self.tree = self.file.Get(self.treepath)
-            if not self.tree:
-                raise IOError("tree \"{0}\" not found in file \"{1}\"".format(self.treepath, self.filepaths[self._fileindex]))
+            self.file, self.tree = self._gettree(self.filepaths[self._fileindex])
 
         self._filename = self.filepaths[self._fileindex]
         self._fileindex += 1
@@ -570,33 +600,30 @@ class ROOTDatasetFromFiles(ROOTDataset):
 
     def _findentry(self, entry):
         if not hasattr(self, "_numentries"):
-            self._numentries = []
-
-        oldfileindex = self._fileindex
+            len(self)
 
         firstentry = 0
         lastentry = 0
-        self._rewind()
-        while self._hasnext():
-            if self._fileindex < len(self._numentries):
-                numentries = self._numentries[self._fileindex]
+        for i, numentries in enumerate(self._numentries):
+            lastentry += numentries
 
-                lastentry += numentries
-                if entry < lastentry:
-                    self._next(self._fileindex != oldfileindex)
-                    return self.tree, firstentry
-                else:
-                    self._next(False)
-
-            else:
-                self._next(True)
-                numentries = self.tree.GetEntries()
-                self._numentries.append(numentries)
-
-                lastentry += numentries
-                if entry < lastentry:
-                    return self.tree, firstentry
+            if entry < lastentry:
+                if self._fileindex != i + 1:
+                    self.file, self.tree = self._gettree(self.filepaths[i])
+                    self._filename = self.filepaths[i]
+                    self._fileindex = i + 1
+                    
+                return self.tree, firstentry
 
             firstentry += numentries
 
         raise IndexError("ROOTDataset index {0} out of range ({1})".format(entry, lastentry))
+
+    def __len__(self):
+        if not hasattr(self, "_numentries"):
+            self._numentries = []
+            for filepath in self.filepaths:
+                file, tree = self._gettree(filepath)
+                self._numentries.append(tree.GetEntries())
+
+        return sum(self._numentries)
