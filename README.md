@@ -16,11 +16,11 @@ Here is an old poster describing the motivation and feasibility studies.
 
 Although it's in the early stages of development, you can check out and run some examples of HEPQuery. First get the dependencies:
 
-   * [Revision 203 of PLUR](https://github.com/diana-hep/plur/releases/tag/rev203); install with `python setup.py install --user`
+   1. [Revision 203 of PLUR](https://github.com/diana-hep/plur/releases/tag/rev203); install with `python setup.py install --user`
 
-   * [Numba](https://numba.pydata.org/#installing); e.g. from [Conda](https://conda.io/miniconda.html)
+   2. [Numba](https://numba.pydata.org/#installing); e.g. from [Conda](https://conda.io/miniconda.html)
 
-   * [ROOT with BulkAPI](https://github.com/jpivarski/root/tree/root-bulkapi-fastread-v2)
+   3. [ROOT with BulkAPI](https://github.com/jpivarski/root/tree/root-bulkapi-fastread-v2)
 
      ```
      git clone https://github.com/jpivarski/root.git -b root-bulkapi-fastread-v2
@@ -28,7 +28,7 @@ Although it's in the early stages of development, you can check out and run some
 
      and [compile ROOT](https://root.cern.ch/building-root). This is required for a ROOT → Numpy feature that should be in ROOT version 6.12 (this winter).
 
-   * **Not** Femtocode; it is not necessary.
+   4. **Not** Femtocode; it is not necessary.
 
 Finally, git-clone Revision XYZ of HEPQuery and install it with `python setup.py install --user`.
 
@@ -70,9 +70,11 @@ All mutable data must be passed in as an explicit argument, such as `histogram` 
 
 Run it in debug mode to see how the code gets transformed and to measure the rate of access/computation.
 
-```
+```python
 >>> dataset.foreachtree(fcn, histogram, numba=True, debug=True)
+```
 
+```
 BEFORE:
 
 def fcn(tree, histogram):
