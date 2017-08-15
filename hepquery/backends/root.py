@@ -17,6 +17,7 @@
 from types import MethodType
 import glob
 import os
+import re
 import sys
 import time
 
@@ -47,9 +48,11 @@ class ROOTDataset(object):
     def __init__(self):
         raise TypeError("use ROOTDataset.fromtree, ROOTDataset.fromchain, or ROOTDataset.fromfiles to create a ROOTDataset")
 
+    NORMALIZE_NAMES = re.compile("[^a-zA-Z0-9]")   # no underscores because that's an escape character
+
     @staticmethod
     def normalizename(name):
-        return name    # FIXME!
+        return ROOTDataset.NORMALIZE_NAMES.sub(lambda x: "_{0:02x}".format(ord(x.group(0))), name)
 
     @staticmethod
     def branch2dtype(branch):
@@ -83,44 +86,6 @@ class ROOTDataset(object):
             return uint64.of
         else:
             raise NotImplementedError("TLeaf::GetTypeName() == \"{0}\"".format(leaftype))
-
-    @staticmethod
-    def branch2array(tree, branchname, count2offset=False):
-        branch = tree.GetBranch(branchname)
-
-        # infer the Numpy dtype from the TLeaf type, but it starts as big-endian
-        dtype = ROOTDataset.branch2dtype(branch).newbyteorder(">")
-
-        # this is a (slight) overestimate of the size (due to ROOT headers per cluster)
-        if count2offset:
-            size = branch.GetTotalSize() + 1
-        else:
-            size = branch.GetTotalSize()
-
-        # allocate some memory
-        array = numpy.empty(size, dtype=dtype)
-
-        # fill it
-        if count2offset:
-            entries, bytes = branch.FillNumpyArray(array[1:])
-        else:
-            entries, bytes = branch.FillNumpyArray(array)
-
-        # clip it to the actual length, which we know exactly after filling
-        if count2offset:
-            array = array[: (bytes // array.dtype.itemsize) + 1]
-        else:
-            array = array[: (bytes // array.dtype.itemsize)]
-
-        # swap the byte order: physical and interpreted
-        array = array.byteswap(True).view(array.dtype.newbyteorder("="))
-
-        # if this is to be an offset array, compute the cumulative sum of counts
-        if count2offset:
-            array[0] = 0
-            numpy.cumsum(array[1:], out=array[1:])
-
-        return array
 
     @staticmethod
     def tree2type(tree, prefix=None, delimiter="-"):
@@ -218,10 +183,50 @@ class ROOTDataset(object):
 
         return tpe, prefix, column2branch, column2dtype
 
+    @staticmethod
+    def branch2array(tree, branchname, count2offset=False):
+        branch = tree.GetBranch(branchname)
+
+        # infer the Numpy dtype from the TLeaf type, but it starts as big-endian
+        dtype = ROOTDataset.branch2dtype(branch).newbyteorder(">")
+
+        # this is a (slight) overestimate of the size (due to ROOT headers per cluster)
+        if count2offset:
+            size = branch.GetTotalSize() + 1
+        else:
+            size = branch.GetTotalSize()
+
+        # allocate some memory
+        array = numpy.empty(size, dtype=dtype)
+
+        # fill it
+        if count2offset:
+            entries, bytes = branch.FillNumpyArray(array[1:])
+        else:
+            entries, bytes = branch.FillNumpyArray(array)
+
+        # clip it to the actual length, which we know exactly after filling
+        if count2offset:
+            array = array[: (bytes // array.dtype.itemsize) + 1]
+        else:
+            array = array[: (bytes // array.dtype.itemsize)]
+
+        # swap the byte order: physical and interpreted
+        array = array.byteswap(True).view(array.dtype.newbyteorder("="))
+
+        # if this is to be an offset array, compute the cumulative sum of counts
+        if count2offset:
+            array[0] = 0
+            numpy.cumsum(array[1:], out=array[1:])
+
+        return array
+
     def compile(self, fcn, paramtypes={}, environment={}, numba=None, debug=False):
+        # compile and also identify the subset of columns that are actually used in the code
         cfcn, columns = plur.compile.code.local(fcn, paramtypes, environment, numba, debug, self._column2branch)
         return cfcn, columns
 
+    # for sequential access: this is the primitive form out of which foreach, map, filter, etc. can be built
     def foreachtree(self, fcn, *otherargs, **options):
         debug = options.get("debug", False)
         if debug:
@@ -232,6 +237,7 @@ class ROOTDataset(object):
             totalbytes = 0
             stopwatch1 = time.time()
 
+        # replace object references with floating indexes
         cfcn, columns = self.compile(fcn, (self.type,), **options)
         arraynames = [ArrayName.parse(c, self.prefix) for c in columns]
         
@@ -239,9 +245,11 @@ class ROOTDataset(object):
             print("")
             longestline = 0
 
+        # make the "top array" manually (there is no ROOT equivalent)
         toparrayname = ArrayName(self.prefix).toListOffset()
         toparray = numpy.array([0, 0], dtype=numpy.int64)
 
+        # create empty arguments for a first evaluation of the function (to force compilation)
         fcnargs = []
         for column, arrayname in zip(columns, arraynames):
             if arrayname == toparrayname:
@@ -250,6 +258,7 @@ class ROOTDataset(object):
                 array = numpy.array([], dtype=self._column2dtype[column])
             fcnargs.append(array)
 
+        # first evaluation of the function with empty arguments
         fcnargs.extend(otherargs)
         try:
             cfcn(*fcnargs)
@@ -260,47 +269,59 @@ class ROOTDataset(object):
         if debug:
             stopwatch2 = time.time()
 
+        # start loop over TFiles/TTrees in the chain
         self._rewind()
         while self._hasnext():
             if debug:
                 stopwatch3 = time.time()
 
+            # step to the next partition and actually open ROOT files *only if* some needed column can't be found in the cache
             partition = self._partition()
             self._next(self.cache is None or any(not self.cache.has("{0}.{1}.{2}".format(column, partition, self._column2dtype[column])) for column, arrayname in zip(columns, arraynames)))
 
             if debug:
                 stopwatch4 = time.time()
 
+            # make real function arguments this time
             fcnargs = []
             nbytes = 0
             cachetotouch = []
             for column, arrayname in zip(columns, arraynames):
                 array = None
 
+                # first check the cache for the column
                 if self.cache is not None:
                     cachename = "{0}.{1}.{2}".format(column, partition, self._column2dtype[column])
 
                     if self.cache.has(cachename):
                         cachetotouch.append(cachename)
 
+                        # link the array file out and copy it to RAM with atomic operations
                         tmpfilename = os.path.join(self.cacheuser, "tmp")
                         try:
                             self.cache.linkfile(cachename, tmpfilename)
                             array = numpy.fromfile(open(tmpfilename, "rb"), dtype=self._column2dtype[column])
                         finally:
+                            # always deleting our extra link when done (or failed)
                             if os.path.exists(tmpfilename):
                                 os.remove(tmpfilename)
 
+                        # special case: the top array
                         if arrayname == toparrayname:
                             toparray = array
 
+                # if we couldn't get the array from cache, get it from ROOT
                 if array is None:
                     if arrayname == toparrayname:
                         toparray[1] = self.tree.GetEntries()
                         array = toparray
                     else:
-                        array = ROOTDataset.branch2array(self.tree, self._column2branch[column], len(arrayname.path) > 0 and arrayname.path[-1] == (ArrayName.LIST_OFFSET,))
+                        # actually read the ROOT file, converting to offsets if this column is a counter
+                        array = ROOTDataset.branch2array(self.tree,
+                                                         self._column2branch[column],
+                                                         len(arrayname.path) > 0 and arrayname.path[-1] == (ArrayName.LIST_OFFSET,))
 
+                    # put it into the cache for next time
                     if self.cache is not None:
                         try:
                             tmpfilename = os.path.join(self.cacheuser, "tmp")
@@ -313,24 +334,28 @@ class ROOTDataset(object):
                 fcnargs.append(array)
                 nbytes += array.nbytes
 
+            # other arguments, not input arrays
+            fcnargs.extend(otherargs)
+
             nentries = toparray[1]
             totalentries += nentries
             totalbytes += nbytes
 
-            fcnargs.extend(otherargs)
-
+            # touch all recently used columns at once for fewer directory clean-ups
             if self.cache is not None:
                 self.cache.touch(*cachetotouch)
 
             if debug:
                 stopwatch5 = time.time()
 
+            # actually run the function
             try:
                 cfcn(*fcnargs)
             except:
                 sys.stderr.write("Failed while processing \"{0}\"\n".format(self._identity()))
                 raise
 
+            # debugging output
             if debug:
                 stopwatch6 = time.time()
 
@@ -346,6 +371,7 @@ class ROOTDataset(object):
                 totalio += stopwatch5 - stopwatch4
                 totalrun += stopwatch6 - stopwatch5
 
+        # final debugging output
         if debug:
             print("=" * longestline)
             print("""
@@ -365,6 +391,7 @@ total time spent compiling: {0:.3f} sec
                 totalentries/totalrun/1e6,
                 time.time() - stopwatch1).lstrip())
 
+    # for random access: only load arrays from ROOT on demand (does not use cache)
     class LazyArray(object):
         def __init__(self, tree, branchname, start, count2offset):
             self.tree = tree
@@ -378,6 +405,7 @@ total time spent compiling: {0:.3f} sec
                 self.array = ROOTDataset.branch2array(self.tree, self.branchname, self.count2offset)
             return self.array[i - self.start]
 
+    # interpret negative indexes as starting at the end of the dataset
     def _normalize(self, i, clip, step):
         lenself = len(self)
 
@@ -401,6 +429,7 @@ total time spent compiling: {0:.3f} sec
             raise IndexError("ROOTDataset index out of range: {0} for length {1}".format(i, lenself))
 
     def __getitem__(self, entry):
+        # handle slices
         if isinstance(entry, slice):
             lenself = len(self)
 
@@ -427,29 +456,38 @@ total time spent compiling: {0:.3f} sec
             else:
                 stop = self._normalize(entry.stop, True, step)
 
+            # by repeatedly calling this function with individual indexes
             return [self[i] for i in range(start, stop, step)]
 
         else:
             entry = self._normalize(entry, False, 1)
 
+            # find out which tree we need to load
             tree, start = self._findentry(entry)
 
+            # cache the infrastructure for this tree so that contiguous access is not too slow
             if getattr(self, "_start", None) != start:
                 lazyarrays = {}
                 for column, branchname in self._column2branch.items():
                     arrayname = ArrayName.parse(column, self.prefix)
 
                     if arrayname == ArrayName(self.prefix).toListOffset():
+                        # special case: the top array
                         array = numpy.array([0, tree.GetEntries()], dtype=numpy.int64)
                     else:
+                        # create a LazyArray for this ROOT branch; maybe it will be read from ROOT, maybe not
                         array = self.LazyArray(tree, branchname, 0, len(arrayname.path) > 0 and arrayname.path[-1] == (ArrayName.LIST_OFFSET,))
 
                     lazyarrays[column] = array
 
+                # set the cache with a newly minted PLUR object (for this whole tree)
                 self._start = start
                 self._plur = fromarrays(self.prefix, lazyarrays, tpe=self.type)
 
+            # return the PLUR object at the right index
             return self._plur[entry - start]
+
+##################################################################### ROOTDataset given a single TTree
 
 class ROOTDatasetFromTree(ROOTDataset):
     def __init__(self, tree, prefix=None, cache=None):
@@ -489,6 +527,8 @@ class ROOTDatasetFromTree(ROOTDataset):
 
     def __len__(self):
         return self.tree.GetEntries()
+
+##################################################################### ROOTDataset given a PyROOT TChain object
 
 class ROOTDatasetFromChain(ROOTDataset):
     def __init__(self, chain, prefix=None, cache=None):
@@ -547,6 +587,8 @@ class ROOTDatasetFromChain(ROOTDataset):
 
     def __len__(self):
         return self.chain.GetEntries()
+
+##################################################################### ROOTDataset given a tree name and files
 
 class ROOTDatasetFromFiles(ROOTDataset):
     def __init__(self, treepath, filepaths, prefix=None, cache=None):
