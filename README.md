@@ -17,8 +17,17 @@ Here is an old poster describing the motivation and feasibility studies.
 Although it's in the early stages of development, you can check out and run some examples of HEPQuery. First get the dependencies:
 
    * [Revision 203 of PLUR](https://github.com/diana-hep/plur/releases/tag/rev203); install with `python setup.py install --user`
-   * [Numba](https://numba.pydata.org/#installing); e.g. from [Conda](https://conda.io/miniconda.html).
-   * [ROOT with BulkAPI](https://github.com/jpivarski/root/tree/root-bulkapi-fastread-v2); `git clone https://github.com/jpivarski/root.git -b root-bulkapi-fastread-v2` and [compile ROOT](https://root.cern.ch/building-root). This is for a ROOT → Numpy feature that is scheduled for ROOT version 6.12 (this winter).
+
+   * [Numba](https://numba.pydata.org/#installing); e.g. from [Conda](https://conda.io/miniconda.html)
+
+   * [ROOT with BulkAPI](https://github.com/jpivarski/root/tree/root-bulkapi-fastread-v2)
+
+     ```
+     git clone https://github.com/jpivarski/root.git -b root-bulkapi-fastread-v2
+     ```
+
+     and [compile ROOT](https://root.cern.ch/building-root). This is required for a ROOT → Numpy feature that should be in ROOT version 6.12 (this winter).
+
    * **Not** Femtocode; it is not necessary.
 
 Finally, git-clone Revision XYZ of HEPQuery and install it with `python setup.py install --user`.
