@@ -22,15 +22,13 @@ Although it's in the early stages of development, you can check out and run some
 
    3. [ROOT with BulkAPI](https://github.com/jpivarski/root/tree/root-bulkapi-fastread-v2)
 
-     ```
      git clone https://github.com/jpivarski/root.git -b root-bulkapi-fastread-v2
-     ```
 
      and [compile ROOT](https://root.cern.ch/building-root). This is required for a ROOT → Numpy feature that should be in ROOT version 6.12 (this winter).
 
    4. **Not** Femtocode; it is not necessary.
 
-   5. Finally, git-clone [Revision 40 of HEPQuery](https://github.com/diana-hep/hepquery/releases/tag/rev40) and install it with `python setup.py install --user`.
+   5. Finally, git-clone [Revision 41 of HEPQuery](https://github.com/diana-hep/hepquery/releases/tag/rev41) and install it with `python setup.py install --user`.
 
 On a Python command line, import two HEPQuery features:
 
