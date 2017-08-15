@@ -105,7 +105,7 @@ total time spent compiling: 0.353 sec
       from start to finish: 0.734 sec
 ```
 
-For a fast SSD disk (top speed of 370 MB/s), you can expect rates like
+For a fast SSD disk (top speed of 370 MB/s), you can expect single-threaded rates like
 
 |   | cold files on disk  | files paged to RAM by OS |
 |:-:|:-------------------:|:------------------------:|
@@ -113,6 +113,80 @@ For a fast SSD disk (top speed of 370 MB/s), you can expect rates like
 | subsequent (from cache) | 185 MB/s | 1100 MB/s |
 
 If you turned on the cache, you'll find Numpy arrays in `/mnt/cache`. These are uncompressed and faster to load than ROOT branches, though the new BulkAPI feature is itself an order of magnitude faster than `TTree::Draw` (from files paged to RAM by OS).
+
+The data representation has been designed for fast sequential access, but you can also work with data interactively for testing. It's slower, but quick enough for human feedback. (Like the sequential case, data are only pulled from files on demand.)
+
+```python
+>>> first = dataset[0]
+
+>>> first._fields
+['AK4CHS', 'AK4Puppi', 'AK8CHS', 'AddAK8CHS', 'AddCA15CHS', 'AddCA15Puppi', 'AddCA8Puppi', 'CA15CHS', 'CA15Puppi', 'CA8Puppi', 'Electron', 'GenEvtInfo', 'GenParticle', 'Info', 'Muon', 'PV', 'Photon', 'Tau']
+
+>>> first.Muon
+[<Muon at 0x0>, <Muon at 0x1>]
+
+>>> first.Muon[0].pt, first.Muon[1].pt
+(68.385483, 22.299986)
+
+>>> first.Muon[0].toJson()
+{'staPhi': 0.9862945079803467,
+ 'puppiChHadIso': 1.477783203125,
+ 'staPt': 60.26984786987305,
+ 'trkIso': 0.46461474895477295,
+ 'nPixLayers': 3,
+ 'caloComp': 0.9701600074768066,
+ 'puppiChHadIsoNoLep': 1.477783203125,
+ 'puppiNeuHadIso': 0.6455078125,
+ 'd0': -0.00047574163181707263,
+ 'puppiNeuHadIsoNoLep': 0.6455078125,
+ 'nTkHits': 15,
+ 'pt': 68.38548278808594,
+ 'nTkLayers': 10,
+ 'pfEta': -1.1107865571975708,
+ 'typeBits': 110,
+ 'nMatchStn': 4,
+ 'selectorBits': 32767999,
+ 'nPixHits': 3,
+ 'tkNchi2': 0.7523882389068604,
+ 'segComp': 0.8842684626579285,
+ 'trkID': -1,
+ 'phi': 0.9892331957817078,
+ 'muNchi2': 1.0204561948776245,
+ 'chHadIso': 1.477813959121704,
+ 'dz': 0.0008993322844617069,
+ 'pfPhi': 0.9892331957817078,
+ 'sip3d': -0.5136342644691467,
+ 'nValidHits': 25,
+ 'chi2LocPos': 2.272005319595337,
+ 'glbKink': 7438.8271484375,
+ 'hcalIso': 0.6413036584854126,
+ 'pfPt': 68.38548278808594,
+ 'ecalIso': 0.6047968864440918,
+ 'puIso': 5.423295974731445,
+ 'ptErr': 1.2126946449279785,
+ 'neuHadIso': 0.6455274224281311,
+ 'q': -1,
+ 'trkHitFrac': 1.0,
+ 'eta': -1.1107865571975708,
+ 'pogIDBits': 31,
+ 'puppiGammaIso': 0.953369140625,
+ 'gammaIso': 0.0,
+ 'staEta': -1.1058242321014404,
+ 'trkKink': 4.588568687438965,
+ 'puppiGammaIsoNoLep': 0.953369140625}
+
+>>> dataset[2].Muon
+[<Muon at 0x2>, <Muon at 0x3>]
+
+>>> dataset[:10]
+[<Events at 0x0>, <Events at 0x1>, <Events at 0x2>, <Events at 0x3>, <Events at 0x4>,
+ <Events at 0x5>, <Events at 0x6>, <Events at 0x7>, <Events at 0x8>, <Events at 0x9>]
+
+>>> [x.Muon for x in dataset[:10]]
+[[<Muon at 0x0>, <Muon at 0x1>], [], [<Muon at 0x2>, <Muon at 0x3>], [],
+[<Muon at 0x4>, <Muon at 0x5>], [<Muon at 0x6>], [<Muon at 0x7>], [],
+[<Muon at 0x8>, <Muon at 0x9>], [<Muon at 0xa>, <Muon at 0xb>]]
+```
 
 
 
