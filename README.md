@@ -12,7 +12,7 @@ Here is an old poster describing the motivation and feasibility studies.
 
 ![Femtocode poster](docs/pivarski-femtocode-poster.png)
 
-# Demo (of fast iteration with objects)
+# Demo (of fast iteration, not distributed server)
 
 Although it's in the early stages of development, you can check out and run some examples of HEPQuery. First get the dependencies:
 
@@ -30,9 +30,9 @@ Although it's in the early stages of development, you can check out and run some
 
    4. **Not** Femtocode; it is not necessary.
 
-Finally, git-clone Revision XYZ of HEPQuery and install it with `python setup.py install --user`.
+   5. Finally, git-clone [Revision 40 of HEPQuery](https://github.com/diana-hep/hepquery/releases/tag/rev40) and install it with `python setup.py install --user`.
 
-Import two features:
+On a Python command line, import two HEPQuery features:
 
 ```python
 from hepquery.backends.root import ROOTDataset
@@ -192,6 +192,9 @@ Although this data representation was designed for fast sequential access, you c
  'staEta': -1.1058242321014404,
  'trkKink': 4.588568687438965,
  'puppiGammaIsoNoLep': 0.953369140625}
+
+>>> dataset[1].Muon
+[]
 
 >>> dataset[2].Muon
 [<Muon at 0x2>, <Muon at 0x3>]
