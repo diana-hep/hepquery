@@ -28,13 +28,13 @@ Although it's in the early stages of development, you can check out and run some
 
    4. **Not** Femtocode; it is not necessary.
 
-   5. Finally, git-clone [Revision 42 of HEPQuery](https://github.com/diana-hep/hepquery/releases/tag/rev42) and install it with `python setup.py install --user`.
+   5. Finally, git-clone [Revision 43 of HEPQuery](https://github.com/diana-hep/hepquery/releases/tag/rev43) and install it with `python setup.py install --user`.
 
 On a Python command line, import two HEPQuery features:
 
 ```python
 >>> from hepquery.backends.root import ROOTDataset
->> from hepquery.cache import Cache
+>>> from hepquery.cache import Cache
 ```
 
 for loading data from ROOT and representing them as PLUR for calculations, optionally caching the PLUR for faster iteration.
@@ -62,7 +62,6 @@ Create a "query" by defining a function to be executed on the data. The interfac
 ...             bin = int(muon.pt)
 ...             if bin >= 0 and bin < 100:
 ...                 histogram[bin] += 1
-...
 ```
 
 All mutable data must be passed in as an explicit argument, such as `histogram` here.
@@ -278,7 +277,6 @@ So I put _exactly this Python code_ into the sequential optimizer and ran over t
 ...                 bin = int(mass)
 ...                 if bin >= 0 and bin < 100:
 ...                     histogram[bin] += 1
-...
 
 >>> dataset.foreachtree(fcn, histogram, numba=True, debug=True,
 ...                     environment={"sqrt": sqrt, "cosh": cosh, "cos": cos})
