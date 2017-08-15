@@ -4,6 +4,7 @@ HEPQuery is a project to provide a fast, query-engine style interface to High En
 
    * [Femtocode](https://github.com/diana-hep/femtocode) query language`*`
    * [PLUR](https://github.com/diana-hep/plur) data representation
+   * [Parallelization with Zookeeper](https://github.com/JThanat/femto-mesos/tree/master) Thanat's summer project (see also [his writeup](https://cds.cern.ch/record/2278211?ln=en))
 
 (`*`The Femtocode project is on hold while we develop the data representation and use [Numba-compiled Python](http://numba.pydata.org/) as a query language. Data representation should be independent of language for modularity.
 Here is an old poster describing the motivation and feasibility studies.
@@ -243,7 +244,7 @@ By tinkering on the command line, I computed dimuon masses and found many of the
 91.4703128558
 ```
 
-So I put _exactly this Python code_ into the sequential optimizer and ran over all the data in under a second, at a rate of 14 million events per second (single threaded).
+So I put _exactly this Python code_ into the sequential optimizer and ran over the 21.5 GB dataset in under a second, computing at a rate of 14 million events per second (single threaded).
 
 ```python
 histogram = numpy.zeros(100, dtype=numpy.int32)
