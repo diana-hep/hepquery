@@ -501,7 +501,7 @@ class ROOTDatasetFromTree(ROOTDataset):
         self.type, self.prefix, self._column2branch, self._column2dtype = ROOTDataset.tree2type(self.tree, prefix)
         self.cache = cache
         if cache is not None:
-            self.cacheuser = cache.newuser({self.prefix: [{"file": tree.GetFile().GetName(), "tree": tree.GetName()}]})
+            self.cacheuser = cache.newuser({self.prefix: [{"file": tree.GetCurrentFile().GetName(), "tree": tree.GetName()}]})
 
     def _rewind(self):
         self._dummyindex = 0
