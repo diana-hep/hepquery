@@ -379,8 +379,9 @@ total time spent compiling: {0:.3f} sec
              opening files: {1:.3f} sec
               reading data: {2:.3f} sec ({3:.3f} MB --> {4:.3f} MB/s)
                  computing: {5:.3f} sec ({6:d} entries --> {7:.3f} MHz)
+       reading + computing: {8:.3f} sec ({9:d} entries --> {10:.3f} MHz)
 
-      from start to finish: {8:.3f} sec""".format(
+      from start to finish: {11:.3f} sec""".format(
                 stopwatch2 - stopwatch1,
                 totalopen,
                 totalio,
@@ -389,6 +390,9 @@ total time spent compiling: {0:.3f} sec
                 totalrun,
                 totalentries,
                 totalentries/totalrun/1e6,
+                totalrun + totalio,
+                totalentries,
+                totalentries/(totalrun + totalio)/1e6,
                 time.time() - stopwatch1).lstrip())
 
     # for random access: only load arrays from ROOT on demand (does not use cache)
@@ -503,7 +507,7 @@ class ROOTDatasetFromTree(ROOTDataset):
         self.type, self.prefix, self._column2branch, self._column2dtype = ROOTDataset.tree2type(self.tree, prefix)
         self.cache = cache
         if cache is not None:
-            self.cacheuser = cache.newuser({self.prefix: [{"file": tree.GetFile().GetName(), "tree": tree.GetName()}]})
+            self.cacheuser = cache.newuser({self.prefix: [{"file": tree.GetCurrentFile().GetName(), "tree": tree.GetName()}]})
 
     def _rewind(self):
         self._dummyindex = 0
