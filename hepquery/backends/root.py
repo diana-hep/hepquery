@@ -400,9 +400,11 @@ total time spent compiling: {0:.3f} sec
             self.count2offset = count2offset
             self.array = None
 
+        def _load(self):
+            self.array = ROOTDataset.branch2array(self.tree, self.branchname, self.count2offset)
+            
         def __getitem__(self, i):
-            if self.array is None:
-                self.array = ROOTDataset.branch2array(self.tree, self.branchname, self.count2offset)
+            if self.array is None: self._load()
             return self.array[i - self.start]
 
     # interpret negative indexes as starting at the end of the dataset
@@ -527,6 +529,22 @@ class ROOTDatasetFromTree(ROOTDataset):
 
     def __len__(self):
         return self.tree.GetEntries()
+
+    def arrays(self, columns=lambda n: True, arraynames=lambda n: True, branchnames=lambda n: True, lazy=False):
+        out = {}
+        for column, branchname in self._column2branch.items():
+            arrayname = ArrayName.parse(column, self.prefix)
+            if columns(column) and arraynames(arrayname) and branchnames(branchname):
+                if arrayname == ArrayName(self.prefix).toListOffset():
+                    # special case: the top array
+                    array = numpy.array([0, self.tree.GetEntries()], dtype=numpy.int64)
+                elif lazy:
+                    array = self.LazyArray(self.tree, branchname, 0, len(arrayname.path) > 0 and arrayname.path[-1] == (ArrayName.LIST_OFFSET,))
+                else:
+                    array = self.branch2array(self.tree, branchname, len(arrayname.path) > 0 and arrayname.path[-1] == (ArrayName.LIST_OFFSET,))
+                out[column] = array
+
+        return out
 
 ##################################################################### ROOTDataset given a PyROOT TChain object
 
